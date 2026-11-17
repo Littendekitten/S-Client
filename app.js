@@ -1,6 +1,6 @@
-import { initializeApp, getApps } from 'https://www.gstatic.com/firebasejs/13.3.0/firebase-app.js';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, browserSessionPersistence } from 'https://www.gstatic.com/firebasejs/13.3.0/firebase-auth.js';
-import { getFirestore, doc, getDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/13.3.0/firebase-firestore.js';
+import { initializeApp, getApps } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, browserSessionPersistence } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
+import { getFirestore, doc, getDoc, setDoc, serverTimestamp } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyB5WMIaadItMKOygz-F47aYSmKoltPluF4',
@@ -148,7 +148,7 @@ async function bootstrapSignedInUser(user) {
 }
 
 try {
-  await setPersistence(firebaseAuth, browserLocalPersistence);
+  await Promise.race([setPersistence(firebaseAuth, browserLocalPersistence), new Promise((_, rej) => setTimeout(() => rej(new Error('persistence timeout')), 4000))]);
 } catch (persistenceError) {
   // Session persistence is a safe fallback if browser-level persistent storage is disabled.
   try { await setPersistence(firebaseAuth, browserSessionPersistence); }
@@ -175,7 +175,7 @@ async function tryBootstrap(user) {
 // Resolve a pending redirect sign-in on page return. Redirect is the fallback
 // for browsers/extensions that block Firebase's popup flow.
 try {
-  await getRedirectResult(firebaseAuth);
+  await Promise.race([getRedirectResult(firebaseAuth), new Promise(resolve => setTimeout(resolve, 4000))]);
 } catch (error) {
   console.error('Google redirect sign-in failed:', error);
   const messages = {
@@ -194,7 +194,7 @@ signInButton.addEventListener('click', async () => {
     showAuthMessage('Google account verified. Loading your cloud data…');
   } catch (error) {
     console.error('Google popup sign-in failed:', error);
-    if (error?.code === 'auth/popup-blocked' || error?.code === 'auth/web-storage-unsupported') {
+    if (['auth/popup-blocked', 'auth/web-storage-unsupported', 'auth/operation-not-supported-in-this-environment', 'auth/cancelled-popup-request'].includes(error?.code)) {
       showAuthMessage('Opening Google sign-in in this tab…');
       try {
         await signInWithRedirect(firebaseAuth, googleProvider);
