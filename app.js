@@ -774,7 +774,7 @@ const SKINS = [{
     hull: 0xdfe9f0,
     sail: 0xaee7ff,
     flag: 0x2ec4b6
-];
+}];
 const KITACAT_SKIN = { n:'KitaCat Ship', p:0, hull:0x24243a, sail:0x39245f, flag:0x9b65ff, exclusive:true };
 let coins = 0
   , owned = [0]
