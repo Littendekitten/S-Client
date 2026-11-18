@@ -370,7 +370,27 @@ window.AQUAVOID_BOOT = { authenticated: false, gameSave: null, uid: null, cloudR
 // Firestore auth can resolve before the game API has finished initializing.
 // Wait for the game API before applying the cloud save or creating a new save.
 let resolveAquavoidGameReady;
+let aquavoidGameReadyResolved = false;
+function resolveGameReady(api) {
+  if (aquavoidGameReadyResolved) return;
+  aquavoidGameReadyResolved = true;
+  resolveAquavoidGameReady(api);
+}
+function unavailableAquavoidGameApi(reason) {
+  console.warn('Embedded Aquavoid renderer unavailable; the launcher iframe can still be used.', reason || 'unknown renderer error');
+  return Object.freeze({
+    available: false,
+    loadSave: () => false,
+    save: async () => false,
+    syncLeaderboard: async () => false,
+    getState: () => Object.freeze({ running:false, paused:false, rendererAvailable:false }),
+    getFeature: () => false
+  });
+}
 const aquavoidGameReady = new Promise(resolve => { resolveAquavoidGameReady = resolve; });
+// Protect the Firebase login flow from an unexpected renderer/module failure
+// elsewhere in this large game module. A real renderer resolves this first.
+window.setTimeout(() => resolveGameReady(unavailableAquavoidGameApi('startup timed out')), 16000);
 
 function setAquavoidStatus(message, error = false) {
   if (!aquavoidStatus) return;
@@ -637,9 +657,14 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const toastRegion = $('toastRegion');
 let installedMods = []; // mods of the instance currently selected in the Mods tab
 let currentModInstanceId = null;
+let currentModInstanceVersion = window.__sclientModVersion || null;
+let externalGameWindow = null;
+let externalGameInstanceId = null;
 let activeSessionMods = [];
 let modSessionActive = false;
 let modSessionLoadPromise = null;
+let modInstanceLoadPromise = Promise.resolve(true);
+let modInstanceLoadKey = null;
 function toast(message) {
     if (!toastRegion) return;
     const node = document.createElement('div');
@@ -664,6 +689,7 @@ if (!threeReady || !window.THREE) {
     loadingCover.className = 'renderer-error';
     loadingCover.textContent = 'Aquavoid could not load its 3D renderer. Check your connection to the Three.js CDN and reload this page.';
     console.error('S-Client: Three.js did not load.');
+    resolveGameReady(unavailableAquavoidGameApi('Three.js did not load'));
     return;
 }
 const $stage = $('gameStage');
@@ -675,6 +701,7 @@ try {
     loadingCover.className = 'renderer-error';
     loadingCover.textContent = 'Aquavoid needs WebGL. Enable hardware acceleration in Chrome, then reload S-Client.';
     console.error('S-Client WebGL initialization failed:', error);
+    resolveGameReady(unavailableAquavoidGameApi(error));
     return;
 }
 R.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -3359,12 +3386,13 @@ function loadEnabledModsForAquavoid(onReady) {
         const tick = () => {
             if (phase === 0) {
                 if(modSessionActive)activeSessionMods.forEach(record=>executeSclEvent(record,'onGameUnload',{session:true}));
-                activeSessionMods = installedMods.filter(record => record.enabled).map(record => ({...record, featureStates:{...(record.featureStates || {})}, settings:{...(record.settings || {})}, state:{...(record.state || {})}}));
+                activeSessionMods = installedMods.filter(record => record.enabled && !record.incompatible).map(record => ({...record, featureStates:{...(record.featureStates || {})}, settings:{...(record.settings || {})}, state:{...(record.state || {})}}));
                 modSessionActive = true;
             }
             if (phase === 2) {
                 activeSessionMods.forEach(record => {
-                    executeSclEvent(record, 'onEnable', {session:true});
+                    // onEnable is emitted only when the user changes a mod from
+                    // disabled to enabled; starting a game is a separate event.
                     executeSclEvent(record, 'onGameLoad', {session:true});
                 });
                 applyShaderPipeline();
@@ -3391,6 +3419,70 @@ function loadEnabledModsForAquavoid(onReady) {
     });
     return modSessionLoadPromise;
 }
+function cloneEnabledModRecords() {
+    return installedMods.filter(record => record.enabled && !record.incompatible).map(record => ({
+        ...record,
+        featureStates:{...(record.featureStates || {})},
+        settings:{...(record.settings || {})},
+        state:{...(record.state || {})}
+    }));
+}
+function externalModPayload() {
+    return activeSessionMods.map(record => ({
+        id:record.manifest.id,
+        name:record.manifest.name,
+        enabled:!!record.enabled,
+        gameVersions:[...(record.manifest.gameVersions || [])],
+        featureStates:{...(record.featureStates || {})},
+        settings:{...(record.settings || {})},
+        vehicleSkins:(record.manifest.vehicleSkins || []).map(skin => ({...skin})),
+        permissions:[...(record.manifest.permissions || [])]
+    }));
+}
+function postExternalModState() {
+    if (!externalGameWindow) return;
+    try {
+        externalGameWindow.postMessage({
+            type:'sclient:mods:update',
+            instanceId:externalGameInstanceId,
+            mods:externalModPayload()
+        }, location.origin);
+    } catch (error) { console.warn('Could not send the mod profile to the game frame:', error); }
+}
+function syncExternalGameMods() {
+    // The Mods tab can browse a different instance while another game is
+    // running. Never send that browsing profile into the active game's iframe.
+    if (!externalGameWindow || currentModInstanceId !== externalGameInstanceId) return;
+    const previous = activeSessionMods;
+    const next = cloneEnabledModRecords();
+    const previousIds = new Set(previous.map(record => record.manifest.id));
+    const nextIds = new Set(next.map(record => record.manifest.id));
+    previous.filter(record => !nextIds.has(record.manifest.id)).forEach(record => executeSclEvent(record, 'onGameUnload', {session:true}));
+    next.filter(record => !previousIds.has(record.manifest.id)).forEach(record => executeSclEvent(record, 'onGameLoad', {session:true}));
+    activeSessionMods = next;
+    modSessionActive = true;
+    postExternalModState();
+}
+window.addEventListener('message', event => {
+    if (event.origin !== location.origin || event.source !== externalGameWindow) return;
+    if (event.data?.type === 'sclient:mods:ready') postExternalModState();
+});
+function dispatchAquavoidAction(action, value = 0) {
+    if (!SUPPORTED_ACTIONS.has(action)) { toast('Action not supported.'); return false; }
+    if (externalGameWindow) {
+        if (currentModInstanceId !== externalGameInstanceId) {
+            toast('Select the running game instance to use its mod actions.');
+            return false;
+        }
+        try {
+            externalGameWindow.postMessage({type:'sclient:mods:action', instanceId:externalGameInstanceId, action, value:Number(value) || 0}, location.origin);
+            return true;
+        } catch (error) { console.warn('Could not send mod action to the game frame:', error); }
+    }
+    runModAction({action, value:Number(value) || 0});
+    return true;
+}
+
 function saveMods() {
     const snapshot = installedMods.map(record => ({
         manifest: record.manifest,
@@ -3413,6 +3505,9 @@ const SCL_PERMISSIONS = new Set(['ui.toast','rendering.shaderPacks','eyesight.pr
 const SCL_APIS = new Set(['ui.toast','rendering.selectShaderPack','rendering.resetShaderPack','aquavoid.action']);
 const SCL_EVENTS = ['onInstall','onEnable','onDisable','onSettingChange','onFeatureChange','onGameLoad','onGameUnload','onWorldEnter'];
 const SCL_CONTROL_TYPES = new Set(['text','button','toggle','select','slider','shaderPicker']);
+// Prevent a handler from recursively dispatching itself when its own commands
+// update the same setting or feature that triggered the handler.
+const sclEventInFlight = new WeakMap();
 function isSafeSclKey(value, max = 40) {
     const key = String(value || '');
     return new RegExp(`^[a-zA-Z0-9_-]{1,${max}}$`).test(key) && !['__proto__','prototype','constructor'].includes(key);
@@ -3513,6 +3608,7 @@ function normalizeSclControl(control, index) {
         onClick:normalizeSclCommands(control.onClick, `controls[${index}].onClick`),
         onChange:normalizeSclCommands(control.onChange, `controls[${index}].onChange`)
     };
+    if (type === 'button' && !result.onClick.length) throw new Error(`controls[${index}] button needs an onClick SCL handler.`);
     if (type === 'slider' && (result.max <= result.min || result.max - result.min > 1000000)) throw new Error(`controls[${index}] has an invalid slider range.`);
     if (['toggle','select','slider'].includes(type) && !/^[a-zA-Z0-9_-]{1,40}$/.test(result.setting)) throw new Error(`controls[${index}] must reference a declared setting.`);
     if (type === 'shaderPicker' && !result.onChange.length) throw new Error(`controls[${index}] shaderPicker needs an onChange SCL handler.`);
@@ -3630,7 +3726,7 @@ function readGameVersions(raw) {
     const list = Array.isArray(raw.gameVersions) ? raw.gameVersions : (raw.gameVersion !== undefined && raw.gameVersion !== null && raw.gameVersion !== '' ? [raw.gameVersion] : []);
     return [...new Set(list.map(v => String(v).trim()).filter(Boolean))].slice(0,10);
 }
-function normalizeManifest(raw) {
+function normalizeManifest(raw, targetVersion = currentModInstanceVersion) {
     if (!raw || raw.format !== 'sclient-mod') throw new Error('This is not an S-Client mod.');
     if (JSON.stringify(raw).length > 200000) throw new Error('A .sclient mod must be smaller than 200 KB.');
     const formatVersion = Number(raw.formatVersion);
@@ -3640,6 +3736,7 @@ function normalizeManifest(raw) {
     if (!gameVersions.length) throw new Error(`Missing "gameVersion". Add the Aquavoid version this mod is made for (supported: ${SUPPORTED_GAME_VERSIONS.join(', ')}), e.g. "gameVersion": "1.0".`);
     const compatibleVersions = gameVersions.filter(v => SUPPORTED_GAME_VERSIONS.includes(v));
     if (!compatibleVersions.length) throw new Error(`Not compatible: this mod is made for Aquavoid ${gameVersions.join(', ')}, but only ${SUPPORTED_GAME_VERSIONS.join(', ')} is supported.`);
+    if (targetVersion && !compatibleVersions.includes(String(targetVersion))) throw new Error(`Not compatible with this instance: this mod supports Aquavoid ${compatibleVersions.join(', ')}, but the selected instance is Aquavoid ${targetVersion}.`);
     const id = String(raw.id || '').trim(), name = String(raw.name || '').trim();
     if (!/^[a-z0-9][a-z0-9._-]{1,63}$/i.test(id) || !name || name.length > 70) throw new Error('The mod ID or name is invalid.');
     const features = Array.isArray(raw.features) ? raw.features.slice(0,30).map(f => ({id:String(f.id || ''), name:String(f.name || f.id || 'Feature').slice(0,60), description:String(f.description || '').slice(0,150), defaultEnabled:!!f.defaultEnabled})).filter(f => isSafeSclKey(f.id, 50) && (formatVersion === 2 || SUPPORTED_FEATURES.has(f.id))) : [];
@@ -3712,10 +3809,10 @@ function waveThemesManifest(defaultTheme = 'default') {
     };
 }
 function formatVersionIsScl(manifest) { return Number(manifest?.formatVersion) === 2 && manifest?.language === 'SCL'; }
-function upsertManifest(raw) {
+function upsertManifest(raw, targetVersion = currentModInstanceVersion) {
     // New imports of the retired Nebula Ocean mod are redirected into Wave Themes.
     if (raw && String(raw.id || '').toLowerCase() === 'nebula-ocean') raw = waveThemesManifest('galaxy');
-    const manifest = normalizeManifest(raw);
+    const manifest = normalizeManifest(raw, targetVersion);
     const index = installedMods.findIndex(item => item.manifest.id === manifest.id);
     const oldRecord = index >= 0 ? installedMods[index] : null;
     const states = {};
@@ -3834,8 +3931,20 @@ function applyShaderPipeline() {
         console.error('Could not prepare Eyesight pack:',error);shaderPassFailed=true;shaderPassEnabled=false;activeShaderPack=null;toast('Eyesight could not prepare this shader pack. Original rendering remains active.');
     }
 }
+function setModEnabled(record, enabled) {
+    if (!record || record.incompatible) return;
+    const next = !!enabled;
+    if (!!record.enabled === next) return;
+    record.enabled = next;
+    executeSclEvent(record, next ? 'onEnable' : 'onDisable', {enabled:next});
+    saveMods();
+    renderInstalledMods();
+    refreshIslandEntry();
+    syncExternalGameMods();
+    toast(`${record.manifest.name} ${next ? 'enabled' : 'disabled'}.`);
+}
 function saveAndRenderMods(message) {
-    saveMods(); renderInstalledMods(); refreshIslandEntry();
+    saveMods(); renderInstalledMods(); refreshIslandEntry(); syncExternalGameMods();
     if (message) toast(message);
 }
 function getIntegratedWorldMode() {
@@ -3864,7 +3973,7 @@ function renderEnabledGameModes() {
     const host = $('modGameModes');
     if (!host) return;
     host.replaceChildren();
-    installedMods.filter(record => record.enabled).forEach(record => {
+    installedMods.filter(record => record.enabled && !record.incompatible).forEach(record => {
         (record.manifest.gameModes || []).filter(gameMode => gameMode.type !== 'openWorldSurvival' && (!gameMode.feature || record.featureStates?.[gameMode.feature] === true)).forEach(gameMode => {
             const button = document.createElement('button');
             button.type = 'button';
@@ -3902,12 +4011,12 @@ function renderModLibrary() {
         const card = document.createElement('article'); card.className = 'installed-mod-card owned-mod-card';
         const icon = document.createElement('div'); icon.className = 'mod-icon'; icon.textContent = manifest.icon || '◇';
         const info = document.createElement('div'); info.className = 'available-mod-info';
-        info.innerHTML = `<div class="available-title-row"><h3>${escapeHTML(manifest.name)}</h3><span class="optional-chip">${record.enabled ? 'ENABLED' : 'DISABLED'}</span></div><p>${escapeHTML(manifest.description || 'Imported S-Client mod.')}</p><div class="mod-meta"><span>v${escapeHTML(manifest.version)}</span><span>·</span><span>Aquavoid ${escapeHTML((manifest.gameVersions||[]).join(', ')||'?')}</span><span>·</span><span>${escapeHTML(manifest.author)}</span>${manifest.formatVersion === 2 ? '<span>·</span><span>SCL v1</span>' : ''}</div>`;
+        info.innerHTML = `<div class="available-title-row"><h3>${escapeHTML(manifest.name)}</h3><span class="optional-chip">${record.incompatible ? 'INCOMPATIBLE' : record.enabled ? 'ENABLED' : 'DISABLED'}</span></div><p>${escapeHTML(record.compatibilityError || manifest.description || 'Imported S-Client mod.')}</p><div class="mod-meta"><span>v${escapeHTML(manifest.version)}</span><span>·</span><span>Aquavoid ${escapeHTML((manifest.gameVersions||[]).join(', ')||'?')}</span><span>·</span><span>${escapeHTML(manifest.author)}</span>${manifest.formatVersion === 2 ? '<span>·</span><span>SCL v1</span>' : ''}</div>`;
         const buttons = document.createElement('div'); buttons.className = 'owned-mod-actions';
         const configure = document.createElement('button'); configure.type = 'button'; configure.className = 'download-button'; configure.textContent = 'OPEN PAGE'; configure.addEventListener('click', () => openModPage(record.manifest.id));
-        const toggle = document.createElement('button'); toggle.type = 'button'; toggle.className = `toggle${record.enabled ? ' on' : ''}`; toggle.setAttribute('aria-label', record.enabled ? 'Disable mod' : 'Enable mod'); toggle.addEventListener('click', () => { record.enabled = !record.enabled; saveAndRenderMods(`${manifest.name} ${record.enabled ? 'enabled' : 'disabled'}. It will be applied during the next Aquavoid loading screen.`); refreshIslandEntry(); });
+        const toggle = document.createElement('button'); toggle.type = 'button'; toggle.className = `toggle${record.enabled ? ' on' : ''}`; toggle.disabled = !!record.incompatible; toggle.title = record.compatibilityError || ''; toggle.setAttribute('aria-label', record.enabled ? 'Disable mod' : 'Enable mod'); toggle.addEventListener('click', () => setModEnabled(record, !record.enabled));
         const exportButton = document.createElement('button'); exportButton.type = 'button'; exportButton.className = 'quiet-button'; exportButton.textContent = 'EXPORT'; exportButton.title = 'Export a copy of this mod you own'; exportButton.addEventListener('click', () => exportManifest(record));
-        const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'quiet-button danger-button'; remove.textContent = 'REMOVE'; remove.addEventListener('click', () => { installedMods.splice(index, 1); if (activeModId === manifest.id) activeModId = null; saveAndRenderMods(`${manifest.name} removed from your library.`); });
+        const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'quiet-button danger-button'; remove.textContent = 'REMOVE'; remove.addEventListener('click', () => { if (record.enabled) executeSclEvent(record, 'onDisable', {enabled:false, removed:true}); installedMods.splice(index, 1); if (activeModId === manifest.id) activeModId = null; saveAndRenderMods(`${manifest.name} removed from your library.`); });
         buttons.append(configure, toggle, exportButton, remove); card.append(icon, info, buttons); $('installedMods').appendChild(card);
     });
     refreshIslandEntry();
@@ -3925,7 +4034,7 @@ function addFeatureControl(record, feature, host) {
     text.innerHTML = `<strong>${escapeHTML(feature.name)}</strong><small>${escapeHTML(feature.description || '')}</small>`;
     const control = document.createElement('button'); control.type = 'button'; control.className = `toggle${record.featureStates?.[feature.id] ? ' on' : ''}`;
     control.setAttribute('aria-label', `${record.featureStates?.[feature.id] ? 'Disable' : 'Enable'} ${feature.name}`);
-    control.addEventListener('click', () => { record.featureStates[feature.id] = !record.featureStates[feature.id]; saveMods(); renderModPage(record); refreshIslandEntry(); toast('Feature setting saved. Changes apply during the next Aquavoid loading screen.'); });
+    control.addEventListener('click', () => { const enabled = !record.featureStates[feature.id]; record.featureStates[feature.id] = enabled; executeSclEvent(record, 'onFeatureChange', {feature:feature.id, enabled, value:enabled}); saveMods(); renderModPage(record); refreshIslandEntry(); syncExternalGameMods(); toast('Feature setting saved.'); });
     row.append(text, control); host.appendChild(row);
 }
 function renderSclShaderPicker(host, record, control) {
@@ -3946,8 +4055,11 @@ function renderSclShaderPicker(host, record, control) {
     const original = {id:'',name:'Original',description:'Keep Aquavoid’s natural rendering with no Eyesight colour grade.',settings:{brightness:1,contrast:1,saturation:1,hue:0,tint:'#ffffff',tintStrength:0,vignette:0,grain:0}};
     const choicePacks = [original, ...BUILTIN_SHADERS];
     function selectPack(pack) {
+        const previousValue = activeShaderId;
         activeShaderId = pack.id;
         saveShaders();
+        executeSclCommands(record, control.onChange, {value:pack.id, previousValue, setting:control.setting || control.id, control:control.id});
+        executeSclEvent(record, 'onSettingChange', {setting:control.setting || control.id, value:pack.id, previousValue});
         if (activeModId === record.manifest.id) renderModPage(record);
         toast('Shader selection saved. It will be applied when you launch Aquavoid.');
     }
@@ -3995,7 +4107,7 @@ function renderSclShaderPicker(host, record, control) {
             uniformDefs.forEach(({passIndex,passName,uniform})=>{
                 const row=document.createElement('label');row.className='shader-uniform-row';
                 const title=document.createElement('span');title.textContent=`${uniform.label||uniform.name} · ${passName}`;row.appendChild(title);
-                const update=(next)=>{uniform.value=next;saveShaders();toast('Shader control saved. It will apply during the next Aquavoid loading screen.');};
+                const update=(next)=>{uniform.value=next;saveShaders();postExternalModState();toast('Shader control saved. It will apply during the next Aquavoid loading screen.');};
                 if(uniform.type==='float'){
                     const input=document.createElement('input');input.type='range';input.min=uniform.min??-10;input.max=uniform.max??10;input.step='0.01';input.value=uniform.value;input.disabled=!record.enabled;
                     const output=document.createElement('output');output.textContent=Number(uniform.value).toFixed(2);
@@ -4071,6 +4183,8 @@ function testSclCondition(condition, record, context) {
 function executeSclCommands(record, commands, context = {}) {
     if (!record || !Array.isArray(commands)) return;
     let changed = false, executed = 0;
+    const settingChanges = [];
+    const featureChanges = [];
     const run = (list, depth = 0) => {
         if (depth > 4) throw new Error('SCL nesting limit exceeded.');
         for (const statement of list) {
@@ -4089,11 +4203,16 @@ function executeSclCommands(record, commands, context = {}) {
                 if (message) toast(message);
             } else if (statement.op === 'setSetting') {
                 const definition = record.manifest.settings.find(item => item.id === statement.setting);
-                record.settings[statement.setting] = coerceSclSetting(definition, value); changed = true;
+                const nextValue = coerceSclSetting(definition, value);
+                const previousValue = record.settings[statement.setting];
+                record.settings[statement.setting] = nextValue; changed = true;
+                if (previousValue !== nextValue) settingChanges.push({setting:statement.setting, value:nextValue, previousValue});
             } else if (statement.op === 'setFeature') {
                 if (!record.manifest.features.some(item => item.id === statement.feature)) throw new Error(`Unknown feature: ${statement.feature}`);
                 const enabled = statement.enabled === '$value' ? !!context.value : statement.enabled === '$enabled' ? !!context.enabled : statement.enabled === true;
+                const previousValue = record.featureStates[statement.feature] === true;
                 record.featureStates[statement.feature] = enabled; changed = true;
+                if (previousValue !== enabled) featureChanges.push({feature:statement.feature, enabled, value:enabled, previousValue});
             } else if (statement.op === 'setState') {
                 if (value === undefined || ['object','function'].includes(typeof value)) throw new Error('SCL state values must be simple JSON values.');
                 record.state[statement.key] = value; changed = true;
@@ -4114,7 +4233,7 @@ function executeSclCommands(record, commands, context = {}) {
                     activeShaderId = ''; saveShaders();
                 } else if (statement.api === 'aquavoid.action') {
                     if (!sclPermission(record, 'aquavoid.actions') || !SUPPORTED_ACTIONS.has(statement.action)) throw new Error('The aquavoid.actions permission or requested action is unavailable.');
-                    runModAction({action:statement.action, value:Number(value) || 0});
+                    dispatchAquavoidAction(statement.action, Number(value) || 0);
                 }
             }
         }
@@ -4125,20 +4244,39 @@ function executeSclCommands(record, commands, context = {}) {
         console.warn(`SCL runtime error in ${record.manifest.id}:`, error);
         toast(`SCL error: ${error.message}`);
     } finally {
-        if (changed) { saveMods(); if (activeModId === record.manifest.id) renderModPage(record); }
+        if (changed) { saveMods(); if (activeModId === record.manifest.id) renderModPage(record); syncExternalGameMods(); }
+        settingChanges.forEach(change => executeSclEvent(record, 'onSettingChange', change));
+        featureChanges.forEach(change => executeSclEvent(record, 'onFeatureChange', change));
     }
 }
 function executeSclEvent(record, event, context = {}) {
     const commands = record?.manifest?.program?.[event];
-    if (Array.isArray(commands) && commands.length) executeSclCommands(record, commands, context);
+    if (!record || typeof record !== 'object' || !Array.isArray(commands) || !commands.length) return;
+    let active = sclEventInFlight.get(record);
+    if (!active) { active = new Set(); sclEventInFlight.set(record, active); }
+    if (active.has(event)) return;
+    active.add(event);
+    try { executeSclCommands(record, commands, context); }
+    finally {
+        active.delete(event);
+        if (!active.size) sclEventInFlight.delete(record);
+    }
 }
 function updateSclSetting(record, settingId, rawValue, onChange = []) {
     const setting = record.manifest.settings.find(item => item.id === settingId);
     try {
-        record.settings[settingId] = coerceSclSetting(setting, rawValue);
+        const previousValue = record.settings[settingId];
+        const value = coerceSclSetting(setting, rawValue);
+        record.settings[settingId] = value;
+        const context = {setting:settingId, value, previousValue};
+        if (previousValue !== value) {
+            executeSclCommands(record, onChange, context);
+            executeSclEvent(record, 'onSettingChange', context);
+        }
         saveMods();
+        syncExternalGameMods();
         if (activeModId === record.manifest.id) renderModPage(record);
-        toast('Setting saved. It will apply during the next Aquavoid loading screen.');
+        toast('Setting saved.');
     } catch (error) { toast(`Setting error: ${error.message}`); }
 }
 function renderSclControls(record, host) {
@@ -4153,10 +4291,13 @@ function renderSclControls(record, host) {
         }
         if (control.type === 'button') {
             const section = document.createElement('section'); section.className = 'mod-page-section';
-            const button = document.createElement('button'); button.type = 'button'; button.className = 'cheat-action mod-page-action'; button.textContent = control.label; button.disabled = !record.enabled;
-            button.disabled = true;
-            button.textContent = `${control.label} · IN GAME`;
-            if (control.description) { const note = document.createElement('p'); note.className = 'scl-help-text'; note.textContent = `${control.description} Gameplay actions are only available inside an Aquavoid session.`; section.appendChild(note); }
+            const button = document.createElement('button'); button.type = 'button'; button.className = 'cheat-action mod-page-action'; button.textContent = control.label; button.disabled = !record.enabled || !control.onClick.length;
+            button.addEventListener('click', () => {
+                if (!record.enabled) return;
+                executeSclCommands(record, control.onClick, {control:control.id, value:true});
+                toast(`${control.label} executed.`);
+            });
+            if (control.description) { const note = document.createElement('p'); note.className = 'scl-help-text'; note.textContent = control.description; section.appendChild(note); }
             section.appendChild(button); host.appendChild(section); return;
         }
         const row = document.createElement('label'); row.className = 'mod-setting-row';
@@ -4176,7 +4317,7 @@ function renderSclControls(record, host) {
             input.value = String(current); input.addEventListener('change', () => updateSclSetting(record, control.setting, input.value, control.onChange));
         } else {
             input = document.createElement('input'); input.type = 'range'; input.min = String(setting.min); input.max = String(setting.max); input.step = String(setting.step); input.value = String(current); input.className = 'scl-range';
-            input.addEventListener('input', () => { const value = Number(input.value); record.settings[control.setting] = coerceSclSetting(setting, value); const valueLabel = row.querySelector('.scl-value'); if (valueLabel) valueLabel.textContent = String(value); });
+            input.addEventListener('input', () => { const value = Number(input.value); const valueLabel = row.querySelector('.scl-value'); if (valueLabel) valueLabel.textContent = String(value); });
             input.addEventListener('change', () => updateSclSetting(record, control.setting, Number(input.value), control.onChange));
             const valueLabel = document.createElement('small'); valueLabel.className = 'scl-value'; valueLabel.textContent = String(current); copy.appendChild(valueLabel);
         }
@@ -4308,7 +4449,7 @@ async function importModFiles(files) {
                 try {
                     const parsed = JSON.parse(entry.text);
                     if (/\.shadersclient$/i.test(entry.name) || parsed.format === 'sclient-shaderpack') { upsertShaderPack(parsed); shaderCount++; }
-                    else { upsertManifest(parsed); modCount++; }
+                    else { upsertManifest(parsed, currentModInstanceVersion); modCount++; }
                 } catch (error) { errors.push(`${entry.name}: ${error.message}`); }
             }
         } catch (error) { errors.push(`${file.name}: ${error.message}`); }
@@ -4351,38 +4492,103 @@ $('modFileInput').addEventListener('change', async event => {
 $('backToModLibrary').addEventListener('click', () => { activeModId = null; renderModLibrary(); });
 // Per-instance mods: the launcher tells us which instance's mod library to show.
 let modInstanceLoadToken = 0;
-async function applyModInstance(instanceId) {
+function applyModInstance(instanceId, version = window.__sclientModVersion || null) {
+    const normalizedVersion = version ? String(version) : null;
+    const loadKey = `${instanceId || ''}|${normalizedVersion || ''}`;
+    if (loadKey === modInstanceLoadKey) return modInstanceLoadPromise;
+
     const token = ++modInstanceLoadToken;
     currentModInstanceId = instanceId || null;
+    currentModInstanceVersion = normalizedVersion;
+    modInstanceLoadKey = loadKey;
     activeModId = null;
     installedMods.length = 0;
-    if (instanceId) {
-        try {
-            const stored = await window.SClientCloud.loadInstanceMods(instanceId);
-            if (token !== modInstanceLoadToken) return;
-            stored.filter(item => item && item.manifest && item.manifest.format === 'sclient-mod')
-                .forEach(item => installedMods.push({...item, featureStates:item.featureStates || {}, settings:item.settings || {}, state:item.state || {}}));
-        } catch (error) {
-            console.error('Could not load instance mods:', error);
-            toast('Could not load this instance\'s mods.');
+
+    modInstanceLoadPromise = (async () => {
+        if (instanceId) {
+            try {
+                const stored = await window.SClientCloud.loadInstanceMods(instanceId);
+                if (token !== modInstanceLoadToken) return false;
+                stored.filter(item => item && item.manifest && item.manifest.format === 'sclient-mod').forEach(item => {
+                    const declared = readGameVersions(item.manifest);
+                    const compatible = declared.some(v => SUPPORTED_GAME_VERSIONS.includes(v)) && (!currentModInstanceVersion || declared.includes(currentModInstanceVersion));
+                    const record = {...item, featureStates:item.featureStates || {}, settings:item.settings || {}, state:item.state || {}};
+                    delete record.incompatible;
+                    delete record.compatibilityError;
+                    if (!compatible) {
+                        record.enabled = false;
+                        record.incompatible = true;
+                        record.compatibilityError = `This mod supports Aquavoid ${declared.join(', ') || 'no declared version'}, not this ${currentModInstanceVersion ? `Aquavoid ${currentModInstanceVersion}` : 'instance'}.`;
+                    }
+                    installedMods.push(record);
+                });
+            } catch (error) {
+                console.error('Could not load instance mods:', error);
+                toast('Could not load this instance\'s mods.');
+                if (token === modInstanceLoadToken) modInstanceLoadKey = null;
+                return false;
+            }
         }
-    }
-    renderModLibrary();
+        if (token !== modInstanceLoadToken) return false;
+        renderModLibrary();
+        // Re-selecting the instance that is actively running refreshes its live
+        // profile. Selecting a different instance does not affect the game.
+        syncExternalGameMods();
+        return true;
+    })();
+    return modInstanceLoadPromise;
 }
 window.SClientMods = {
-    // Validates a downloaded mod (incl. the required gameVersion) and saves it into one instance's library.
-    async install(instanceId, raw) {
+    // Validates a downloaded mod against the target instance's exact game version.
+    async install(instanceId, raw, version = null) {
         if (!instanceId) throw new Error('Choose an instance first.');
-        if (currentModInstanceId !== instanceId) await applyModInstance(instanceId);
-        const name = upsertManifest(raw);
+        const normalizedVersion = version ? String(version) : null;
+        const requestedLoadKey = `${instanceId}|${normalizedVersion || ''}`;
+        const loaded = currentModInstanceId !== instanceId || currentModInstanceVersion !== normalizedVersion || modInstanceLoadKey !== requestedLoadKey
+            ? await applyModInstance(instanceId, normalizedVersion)
+            : await modInstanceLoadPromise;
+        if (!loaded) throw new Error('Could not load this instance’s mod profile. Check your connection and try again.');
+        const targetVersion = normalizedVersion || currentModInstanceVersion;
+        const name = upsertManifest(raw, targetVersion);
         const ok = await saveMods();
         renderInstalledMods();
         if (ok === false) throw new Error('Could not save to your account.');
+        syncExternalGameMods();
         return name;
+    },
+    async startInstance(instanceId, targetWindow, version) {
+        if (!instanceId || !targetWindow) return {ok:false, message:'The game frame is not ready.'};
+        const normalizedVersion = version ? String(version) : null;
+        const requestedLoadKey = `${instanceId}|${normalizedVersion || ''}`;
+        const loaded = currentModInstanceId !== instanceId || currentModInstanceVersion !== normalizedVersion || modInstanceLoadKey !== requestedLoadKey
+            ? await applyModInstance(instanceId, normalizedVersion)
+            : await modInstanceLoadPromise;
+        if (!loaded) return {ok:false, message:'The instance mod profile could not be loaded. Check your connection and try again.'};
+        if (externalGameWindow && externalGameWindow !== targetWindow && modSessionActive) {
+            activeSessionMods.forEach(record => executeSclEvent(record, 'onGameUnload', {session:true}));
+        }
+        externalGameWindow = targetWindow;
+        externalGameInstanceId = instanceId;
+        activeSessionMods = cloneEnabledModRecords();
+        modSessionActive = true;
+        // onEnable belongs to the enabled-state transition; launching a game
+        // must not dispatch it a second time. onGameLoad is the session event.
+        activeSessionMods.forEach(record => {
+            executeSclEvent(record, 'onGameLoad', {session:true, instanceId, gameVersion:normalizedVersion || ''});
+        });
+        postExternalModState();
+        return {ok:true, modCount:activeSessionMods.length};
+    },
+    stopInstance() {
+        if (externalGameWindow && modSessionActive) activeSessionMods.forEach(record => executeSclEvent(record, 'onGameUnload', {session:true}));
+        externalGameWindow = null;
+        externalGameInstanceId = null;
+        activeSessionMods = [];
+        modSessionActive = false;
     }
 };
-window.addEventListener('sclient:mod-instance', event => applyModInstance(event.detail?.id || null));
-if (window.__sclientModInstance) applyModInstance(window.__sclientModInstance);
+window.addEventListener('sclient:mod-instance', event => applyModInstance(event.detail?.id || null, event.detail?.version || null));
+if (window.__sclientModInstance) applyModInstance(window.__sclientModInstance, window.__sclientModVersion || null);
 $('modsLibraryButton')?.addEventListener('click', () => { activeModId = null; renderModLibrary(); });
 $('modFileInput').setAttribute('multiple','');
 $('modFileInput').setAttribute('accept','.sclient,.shadersclient,.zip,application/zip,application/json,.json');
@@ -4467,7 +4673,7 @@ window.AquavoidGame = Object.freeze({
     unlockShips: () => { owned = SKINS.map((_, index) => index); save(); showCoins(); drawShop(); },
     getFeature: id => modFlag(String(id))
 });
-resolveAquavoidGameReady(window.AquavoidGame);
+resolveGameReady(window.AquavoidGame);
 
 // Keep toolbar and menu state in sync with the game view.
 $('modePill').textContent = 'MENU';

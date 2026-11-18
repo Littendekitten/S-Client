@@ -130,7 +130,27 @@
     </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* Load Three.js from two independent CDNs before the game module starts. */
+window.__aquavoidThreeReady = new Promise(resolve => {
+    const sources = [
+        'https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js',
+        'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js'
+    ];
+    let index = 0;
+    const loadNext = () => {
+        if (window.THREE) { resolve(true); return; }
+        if (index >= sources.length) { resolve(false); return; }
+        const script = document.createElement('script');
+        script.src = sources[index++];
+        script.async = true;
+        script.onload = () => { if (window.THREE) resolve(true); else loadNext(); };
+        script.onerror = loadNext;
+        document.head.appendChild(script);
+    };
+    loadNext();
+});
+</script>
 
 <script>
 /* Modules and Google login do not work from file:// pages */

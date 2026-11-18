@@ -4,6 +4,7 @@ const MAX_INSTANCES = 3;
 const SUPPORTED_VERSIONS = ['1.0', '1.01'];
 // Game versions are hosted in this repo's GitHub Pages root: /game-versions/Aquavoid-<version>/
 const VERSION_FILES = ['index.html', 'app.js', 'style.css'];
+const INSTANCE_CACHE_REVISION = 'sclient-mod-bridge-2026-11-18-r2';
 const versionFolder = v => `game-versions/Aquavoid-${v}/`;
 const $ = id => document.getElementById(id);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -61,7 +62,43 @@ async function idb(mode, fn) {
 }
 const putFile = (id, name, text) => idb('readwrite', s => s.put(text, `${id}/${name}`));
 const getFile = (id, name) => idb('readonly', s => s.get(`${id}/${name}`));
-const deleteFiles = id => idb('readwrite', s => VERSION_FILES.forEach(n => s.delete(`${id}/${n}`)));
+const deleteFiles = id => idb('readwrite', s => [...VERSION_FILES, '_revision'].forEach(n => s.delete(`${id}/${n}`)));
+
+// Serve each installed build from its own IndexedDB copy through a same-origin
+// service-worker URL. This preserves Firebase's origin while actually using the
+// files downloaded for the selected instance.
+let instanceCacheRegistration = null;
+async function ensureInstanceCache() {
+  if (!('serviceWorker' in navigator)) return false;
+  try {
+    if (!instanceCacheRegistration) {
+      const workerUrl = new URL('sclient-sw.js', document.baseURI);
+      const scopeUrl = new URL('./', document.baseURI);
+      instanceCacheRegistration = await navigator.serviceWorker.register(workerUrl.href, { scope: scopeUrl.pathname });
+    }
+    await navigator.serviceWorker.ready;
+    if (!navigator.serviceWorker.controller) {
+      await new Promise(resolve => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          resolve();
+        };
+        const timeout = setTimeout(finish, 1800);
+        navigator.serviceWorker.addEventListener('controllerchange', finish, { once: true });
+        // Close the narrow race where the first controllerchange happened
+        // between the initial check and listener registration.
+        if (navigator.serviceWorker.controller) finish();
+      });
+    }
+    return !!navigator.serviceWorker.controller;
+  } catch (error) {
+    console.warn('Local instance cache is unavailable; using the hosted game files.', error);
+    return false;
+  }
+}
 
 async function downloadVersion(version, id, onProgress) {
   const base = versionFolder(version);
@@ -76,11 +113,13 @@ async function downloadVersion(version, id, onProgress) {
   }
   onProgress?.('Verifying files…', 92);
   for (const name of VERSION_FILES) if (!(await getFile(id, name))) throw new Error(`${name} failed to save`);
+  await putFile(id, '_revision', INSTANCE_CACHE_REVISION);
 }
 
 // ---- Launching: build the game page from the downloaded files and run it in the Game tab ----
 let frameUrls = [];
 function clearFrame() {
+  window.SClientMods?.stopInstance?.();
   const wrap = $('instanceFrameWrap');
   if (document.fullscreenElement === wrap) {
     document.exitFullscreen?.().catch?.(() => {});
@@ -140,19 +179,50 @@ function installBetterESCOnFrame(frame) {
 async function mountInstance(inst) {
   clearFrame();
 
-  // Do not use srcdoc or Blob URLs for the game document. Firebase Auth checks
-  // the page origin during OAuth flows; srcdoc gives the game an about:srcdoc
-  // URL, which causes "Invalid URI scheme in origin: about". Serving the
-  // original game page from this S-Client origin also lets it share the
-  // [DEFAULT] Aquavoid Firebase Auth session created by the launcher.
-  const gameUrl = new URL(versionFolder(inst.version) + 'index.html', document.baseURI);
+  // Ensure a complete installed copy exists before launching. The service
+  // worker serves it under this site's origin (unlike Blob/srcdoc URLs), so
+  // Firebase Auth and relative app/style paths continue to work.
+  let cacheReady = await ensureInstanceCache();
+  let filesReady = false;
+  // IndexedDB requests are asynchronous; verify them before choosing the URL.
+  try {
+    const [storedFiles, revision] = await Promise.all([
+      Promise.all(VERSION_FILES.map(name => getFile(inst.id, name))),
+      getFile(inst.id, '_revision')
+    ]);
+    filesReady = storedFiles.every(value => typeof value === 'string' && value.trim())
+      && revision === INSTANCE_CACHE_REVISION;
+  } catch (_) { filesReady = false; }
+  if (!filesReady) {
+    await downloadVersion(inst.version, inst.id, (label, percent) => {
+      const step = $('installStep'), amount = $('installPercent'), bar = $('installBar');
+      if (step) step.textContent = `Preparing launch: ${label}`;
+      if (amount) amount.textContent = `${percent}%`;
+      if (bar) bar.style.width = `${percent}%`;
+    });
+    cacheReady = await ensureInstanceCache();
+  }
+
+  const gameUrl = cacheReady
+    ? new URL(`instance-cache/${encodeURIComponent(inst.id)}/index.html`, document.baseURI)
+    : new URL(versionFolder(inst.version) + 'index.html', document.baseURI);
   gameUrl.searchParams.set('sclientInstance', inst.id);
+  gameUrl.searchParams.set('sclientVersion', inst.version);
   const betterESCEnabled = await instanceHasBetterESC(inst);
 
   const frame = document.createElement('iframe');
   frame.title = inst.name;
   frame.allow = 'fullscreen; autoplay; clipboard-write';
   if (betterESCEnabled) installBetterESCOnFrame(frame);
+  frame.addEventListener('load', async () => {
+    try {
+      const result = await window.SClientMods?.startInstance?.(inst.id, frame.contentWindow, inst.version);
+      if (result?.ok === false) toast(result.message || 'Mods could not be applied to this instance.');
+    } catch (error) {
+      console.error('Could not initialize this instance mod session:', error);
+      toast('The game started, but its mod profile could not be applied.');
+    }
+  });
   frame.src = gameUrl.href;
   const wrap = $('instanceFrameWrap');
   wrap.appendChild(frame);
@@ -196,8 +266,10 @@ async function mountInstance(inst) {
 // ---- Per-instance mods: pick which instance the Mods tab manages ----
 function setModInstance(id, notify = true) {
   modInstanceId = id && instances.some(i => i.id === id) ? id : null;
+  const selected = instances.find(i => i.id === modInstanceId);
   window.__sclientModInstance = modInstanceId;
-  if (notify) window.dispatchEvent(new CustomEvent('sclient:mod-instance', { detail: { id: modInstanceId } }));
+  window.__sclientModVersion = selected?.version || null;
+  if (notify) window.dispatchEvent(new CustomEvent('sclient:mod-instance', { detail: { id: modInstanceId, version: selected?.version || null } }));
   renderModBar();
 }
 function renderModBar() {
@@ -292,7 +364,8 @@ async function installCatalogueMod(file, button) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const raw = await res.json();
     setModInstance(instanceId, false);
-    const name = await window.SClientMods.install(instanceId, raw);
+    const instance = instances.find(item => item.id === instanceId);
+    const name = await window.SClientMods.install(instanceId, raw, instance?.version);
     await refreshInstalledIds(instanceId);
     toast(`${name} installed to ${instances.find(i => i.id === instanceId)?.name || 'your instance'}.`);
   } catch (err) {
@@ -377,6 +450,7 @@ function renderLibrary() {
   grid.innerHTML = cards.join('');
   renderCounts();
   if (modInstanceId && !instances.some(i => i.id === modInstanceId)) setModInstance(instances[0]?.id || null);
+  else if (modInstanceId && instances.some(i => i.id === modInstanceId)) setModInstance(modInstanceId, false);
   else if (!modInstanceId && instances.length) setModInstance(activeInstanceId || instances[0].id);
   else renderModBar();
   renderModCatalogue();
@@ -443,6 +517,7 @@ async function launch(id) {
     inst.lastPlayed = Date.now();
     persist();
   }
+  setModInstance(inst.id, true);
   updatePlayHeader();
   renderLibrary();
   goto('play');

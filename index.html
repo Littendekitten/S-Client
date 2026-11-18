@@ -295,7 +295,7 @@
 
   <script>
     // Three.js is optional for the client UI. If both mirrors fail, app.js starts
-    // the built-in 2D compatibility game instead of aborting all button handlers.
+    // the alternate Three.js CDN before the game renderer initializes.
     window.__sclientThreeReady = new Promise(resolve => {
       const sources = [
         'https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js',
@@ -308,7 +308,7 @@
         const script = document.createElement('script');
         script.src = sources[index++];
         script.async = true;
-        script.onload = () => resolve(!!window.THREE);
+        script.onload = () => { if (window.THREE) resolve(true); else loadNext(); };
         script.onerror = loadNext;
         document.head.appendChild(script);
       };

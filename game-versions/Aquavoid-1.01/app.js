@@ -26,6 +26,51 @@ import {
     getDocs
 } from "https://www.gstatic.com/firebasejs/12.17.1/firebase-firestore.js";
 
+const sclientThreeReady = await (window.__aquavoidThreeReady || Promise.resolve(!!window.THREE));
+if (!sclientThreeReady || !window.THREE) {
+    const status = document.getElementById('authStatus');
+    if (status) status.textContent = 'Aquavoid could not load Three.js from either CDN. Check your connection and reload the game.';
+    throw new Error('Three.js failed to load from the primary and fallback CDN sources.');
+}
+
+// Same-origin S-Client mod bridge. Mods are data-only SCL profiles; the game
+// accepts only bounded feature flags/settings and the fixed action allow-list.
+const SCLIENT_MOD_FEATURES = new Set(['freezeTimer','crystalMagnet','noDashCooldown','superJump','auroraWake','waveThemes','tidalEngine','guardianDrones','treasureRadar','comboReactor']);
+const AquavoidMods = (() => {
+    let mods = [];
+    return Object.freeze({
+        set(next) {
+            mods = Array.isArray(next) ? next.filter(mod => mod && mod.enabled === true && typeof mod.id === 'string').slice(0,40) : [];
+        },
+        hasFeature(id) {
+            if (!SCLIENT_MOD_FEATURES.has(String(id))) return false;
+            return mods.some(mod => mod.featureStates && mod.featureStates[id] === true);
+        },
+        getSetting(modId, settingId, fallback) {
+            const mod = mods.find(item => item.id === String(modId));
+            const value = mod?.settings?.[String(settingId)];
+            return value === undefined || value === null ? fallback : value;
+        },
+        getVehicleSkin() {
+            for (const mod of mods) {
+                if (!mod.permissions?.includes('vehicles.shipSkins')) continue;
+                const skin = mod.vehicleSkins?.[0];
+                if (skin) return skin;
+            }
+            return null;
+        }
+    });
+})();
+window.addEventListener('message', event => {
+    if (event.source !== window.parent || event.origin !== location.origin || !event.data || typeof event.data !== 'object') return;
+    if (event.data.type === 'sclient:mods:update') {
+        AquavoidMods.set(event.data.mods);
+        window.AquavoidModAPI?.applyMods?.(event.data.mods);
+    } else if (event.data.type === 'sclient:mods:action') {
+        window.AquavoidModAPI?.runAction?.(event.data.action, event.data.value);
+    }
+});
+
 // ==========================================
 // AQUAVOID FIREBASE CONFIG
 // ==========================================
@@ -77,7 +122,7 @@ g.setAttribute('position',new THREE.Float32BufferAttribute(a,3));window.stars=ne
 
 const N=71,G=1.6,H=(N-1)/2,LIM=H*G-1;
 let base=1.6,surge=0;
-const amp=()=>base*(1+surge);
+const amp=()=>base*(1+surge)*(AquavoidMods.hasFeature('tidalEngine')?1.12:1);
 const IR=17.5;
 let inHub=true,panelOpen=false,nearDock=-1;
 const calmAt=(x,z)=>inHub?Math.min(1,Math.max(.06,(Math.hypot(x,z)-IR)/35)):1;
@@ -85,7 +130,7 @@ const h=(x,z,t)=>calmAt(x,z)*amp()*(.6*Math.sin(.28*x+1.1*t)+.5*Math.sin(.23*z-.
 const pg0=new THREE.PlaneGeometry((N-1)*G,(N-1)*G,N-1,N-1);pg0.rotateX(-Math.PI/2);pg0.setAttribute('color',new THREE.BufferAttribute(new Float32Array(N*N*3),3));
 const mesh=new THREE.Mesh(pg0,new THREE.MeshStandardMaterial({vertexColors:true,roughness:.22,metalness:.1}));mesh.frustumCulled=false;S.add(mesh);
 const lo=new THREE.Color(0x06284a),mi=new THREE.Color(0x0f7c8f),hi=new THREE.Color(0x6fd0c8),fo=new THREE.Color(0xf2fbff),col=new THREE.Color(),m4=new THREE.Matrix4(),q=new THREE.Quaternion(),v3=new THREE.Vector3(),sc=new THREE.Vector3();
-function grid2(t,cx,cz){const A=amp()*1.5,ox=Math.round(cx/G)*G,oz=Math.round(cz/G)*G,pa=pg0.attributes.position,ca=pg0.attributes.color;
+function grid2(t,cx,cz){const theme=AquavoidMods.hasFeature('waveThemes')?AquavoidMods.getSetting('wave-themes','theme','default'):'default';const palette=({aurora:[0x10234f,0x285f98,0x9b83df],galaxy:[0x100f32,0x44318a,0xc38cff],bathhouse:[0x183f37,0x579a79,0xc5e5a9]})[theme]||[0x06284a,0x0f7c8f,0x6fd0c8];lo.setHex(palette[0]);mi.setHex(palette[1]);hi.setHex(palette[2]);const A=amp()*1.5,ox=Math.round(cx/G)*G,oz=Math.round(cz/G)*G,pa=pg0.attributes.position,ca=pg0.attributes.color;
  mesh.position.set(ox,0,oz);let i=0;
  for(let b=0;b<N;b++)for(let a=0;a<N;a++){const lx=(a-H)*G,lz=(b-H)*G,y=h(ox+lx,oz+lz,t);pa.setXYZ(i,lx,y,lz);
   const k=THREE.MathUtils.clamp((y/A+1)/2,0,1);
@@ -416,7 +461,96 @@ function detail(i){const w=HW[i],add=(g,m,x,y,z,rz)=>{const o=new THREE.Mesh(g,m
   for(const z of[-.5,.4])add(new THREE.CylinderGeometry(.09,.11,.75,8),metal,s*(w+.1),.34,z,Math.PI/2)}
  add(new THREE.BoxGeometry(w*1.6,.05,2.2),deckM,0,.36,0);
  add(new THREE.SphereGeometry(.1,8,6),new THREE.MeshBasicMaterial({color:0xffd27a}),0,.55,1.2)}
-function applySkin(i){const s=SKINS[i];wood.color.setHex(s.hull);cloth.color.setHex(s.sail);flag.material.color.setHex(s.flag);while(P.children.length)P.remove(P.children[0]);SHAPES[SHAPE_OF[i]]();detail(i)}
+function buildSclientModShip(skin) {
+    const hullMat = new THREE.MeshStandardMaterial({
+        color: skin.hullColor || '#805232',
+        metalness: skin.style === 'ironclad' ? .62 : .18,
+        roughness: skin.style === 'ironclad' ? .34 : .72
+    });
+    const accentMat = new THREE.MeshStandardMaterial({ color: skin.accentColor || '#d9b45a', metalness:.48, roughness:.42 });
+    const glowMat = new THREE.MeshStandardMaterial({
+        color: skin.glowColor || '#b6e2ee', emissive:skin.glowColor || '#b6e2ee',
+        emissiveIntensity:.65, metalness:.28, roughness:.3
+    });
+    const add = (geometry, material, x, y, z) => {
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.position.set(x, y, z);
+        P.add(mesh);
+        return mesh;
+    };
+
+    add(new THREE.BoxGeometry(1.4,.48,3.15), hullMat, 0,.08,0);
+    const bowGeometry = new THREE.ConeGeometry(1.4*.7071,1.5,4);
+    bowGeometry.rotateY(Math.PI/4);
+    bowGeometry.rotateX(-Math.PI/2);
+    add(bowGeometry, hullMat, 0,.08,-2.05).scale.y = .48/1.4;
+    add(new THREE.BoxGeometry(1.18,.12,2.3), accentMat, 0,.37,.12);
+
+    const hullCount = skin.style === 'trimaran' ? 3 : skin.style === 'catamaran' ? 2 : 1;
+    if (hullCount > 1) {
+        for (let index=0; index<hullCount; index++) {
+            const side = index - (hullCount-1)/2;
+            if (side === 0) continue;
+            add(new THREE.BoxGeometry(.34,.34,2.9), hullMat, side*.9,.02,.05);
+            add(new THREE.BoxGeometry(.09,.1,2.55), glowMat, side*.9,.21,.02);
+        }
+    }
+    if (skin.style === 'ironclad') {
+        for (const side of [-1,1]) {
+            add(new THREE.BoxGeometry(.08,.22,2.8), accentMat, side*.66,.46,.04);
+            add(new THREE.SphereGeometry(.12,10,8), glowMat, side*.55,.62,-1.05);
+        }
+    }
+
+    add(new THREE.CylinderGeometry(.075,.075,3.8,10), hullMat, 0,2.05,-.08);
+    const sailWidth = skin.style === 'ironclad' ? 1.5 : 2.0;
+    const sailGeometry = new THREE.PlaneGeometry(sailWidth,2.45,8,8);
+    const sailPositions = sailGeometry.attributes.position;
+    for (let index=0; index<sailPositions.count; index++) {
+        const x = sailPositions.getX(index), y = sailPositions.getY(index);
+        sailPositions.setZ(index, Math.sin((x/sailWidth+.5)*Math.PI)*.32*(1-(y/2.45+.5)*.4));
+    }
+    sailGeometry.computeVertexNormals();
+    const sail = add(sailGeometry, cloth, 0,2.15,-.18);
+    sail.rotation.y = Math.PI;
+    cloth.color.set(skin.sailColor || '#f6efe0');
+    for (const side of [-1,1]) add(new THREE.BoxGeometry(.045,2.45,.06), glowMat, side*.99,2.16,-.18);
+
+    flag.material.color.set(skin.flagColor || '#ff6b8a');
+    flag.position.set(.28,4.05,-.08);
+    P.add(flag);
+
+    const badgeCanvas = document.createElement('canvas');
+    badgeCanvas.width = badgeCanvas.height = 128;
+    const context = badgeCanvas.getContext('2d');
+    context.clearRect(0,0,128,128);
+    context.fillStyle = skin.flagColor || '#ff6b8a';
+    context.beginPath(); context.arc(64,64,56,0,Math.PI*2); context.fill();
+    context.fillStyle = '#ffffff'; context.font = 'bold 58px sans-serif';
+    context.textAlign = 'center'; context.textBaseline = 'middle';
+    context.fillText(skin.icon || '⛵',64,66);
+    const badgeTexture = new THREE.CanvasTexture(badgeCanvas);
+    badgeTexture.encoding = THREE.sRGBEncoding;
+    const badge = new THREE.Mesh(new THREE.PlaneGeometry(.75,.75), new THREE.MeshBasicMaterial({
+        map:badgeTexture, transparent:true, side:THREE.DoubleSide, depthWrite:false, toneMapped:false
+    }));
+    badge.position.set(0,2.18,-.31); badge.rotation.y = Math.PI; P.add(badge);
+    if (skin.logo) {
+        const logoImage = new Image();
+        logoImage.onload = () => {
+            context.clearRect(0,0,128,128);
+            context.fillStyle = '#ffffff'; context.beginPath(); context.arc(64,64,58,0,Math.PI*2); context.fill();
+            context.save(); context.beginPath(); context.arc(64,64,54,0,Math.PI*2); context.clip();
+            context.drawImage(logoImage,6,6,116,116); context.restore();
+            badgeTexture.needsUpdate = true;
+        };
+        logoImage.onerror = () => console.warn('S-Client ship-skin logo could not be decoded.');
+        logoImage.src = skin.logo;
+    }
+    add(new THREE.SphereGeometry(.1,10,8), glowMat, 0,.55,1.22);
+}
+
+function applySkin(i){const s=SKINS[i]||SKINS[0];while(P.children.length)P.remove(P.children[0]);const modSkin=AquavoidMods.getVehicleSkin();if(modSkin){buildSclientModShip(modSkin);return}wood.color.setHex(s.hull);cloth.color.setHex(s.sail);flag.material.color.setHex(s.flag);SHAPES[SHAPE_OF[i]||SHAPE_OF[0]]();detail(i||0)}
 const hx=n=>'#'+n.toString(16).padStart(6,'0');
 function drawShop(){const g=$('grid');g.innerHTML='';SKINS.forEach((s,i)=>{const b=document.createElement('button'),own=owned.includes(i);b.className='sk'+(i===sel?' on':'');
  b.innerHTML='<i style="background:'+hx(s.hull)+'"></i><i style="background:'+hx(s.sail)+'"></i><span>'+s.n+'</span><small>'+(i===sel?'Equipped':own?'Equip':s.p+' coins')+'</small>';
@@ -444,7 +578,7 @@ function mkMon(k){const T=MT[k],g=new THREE.Group(),mat=new THREE.MeshStandardMa
 function pickType(){const r=Math.random();if(mode==='endless'){if(wave>=5&&r<.12)return 2;if(wave>=3&&r<.45)return 1;return 0}if(lvi>=4&&r<.06)return 2;if(lvi>=2&&r<.35)return 1;return 0}
 function spawnMon(k){const m=mkMon(k===undefined?pickType():k),a=Math.random()*6.283,d=30+Math.random()*10,p=P.position;m.o.position.set(p.x+Math.cos(a)*d,0,p.z+Math.sin(a)*d);m.hp=Math.ceil(m.T.hp*(mode==='endless'?1+wave*.12:1+lvi*.1));mons.push(m)}
 function dmg(m,d){m.hp-=d;m.hit=.12}
-function battle(dt){const p=P.position;hurtT-=dt;
+function battle(dt){const p=P.position;hurtT-=dt;sclientStormCooldown=Math.max(0,sclientStormCooldown-dt);if(AquavoidMods.hasFeature('guardianDrones')){sclientDroneCooldown-=dt;if(sclientDroneCooldown<=0&&mons.length){const target=mons.reduce((best,item)=>Math.hypot(item.o.position.x-p.x,item.o.position.z-p.z)<Math.hypot(best.o.position.x-p.x,best.o.position.z-p.z)?item:best);if(Math.hypot(target.o.position.x-p.x,target.o.position.z-p.z)<38){dmg(target,2.2);emit(target.o.position,0x9b83ff,10,3);sclientDroneCooldown=.72}}}else sclientDroneCooldown=0;
  if(mode==='endless'){if(queue>0){qT-=dt;if(qT<=0){spawnMon(wave%5===0&&queue===1?2:undefined);queue--;qT=.7}}
   else if(!mons.length){waveCool-=dt;if(waveCool<=0){wave++;queue=Math.min(3+wave*2,26);qT=.5;waveCool=3;banner('Wave '+wave);beep(220,.4,'sawtooth',.15);if(wave>1)hp=Math.min(maxhp,hp+15)}}}
  else{spT-=dt;if(spT<=0&&mons.length<LV.m){spawnMon();spT=5}}
@@ -639,11 +773,30 @@ $('nameSave').onclick = saveName;
 $('nameInput').addEventListener('keydown', e => {
     if (e.key === 'Enter') saveName();
 });
+let sclientDroneCooldown=0,sclientStormCooldown=0;
+function applySclientVehicleSkin(){applySkin(sel)}
+window.AquavoidModAPI=Object.freeze({
+ applyMods:()=>applySclientVehicleSkin(),
+ runAction(action,rawValue){const value=Math.max(-1000000,Math.min(1000000,Math.floor(Number(rawValue)||0)));switch(action){
+  case 'collectCrystal':if(run)X.position.set(P.position.x,P.position.y+1,P.position.z);break;
+  case 'refillTimer':if(run&&mode==='level')left=LV.t;break;
+  case 'addCoins':coins=Math.min(9999999,Math.max(0,coins+(value||100)));save();showCoins();break;
+  case 'setCoins':coins=Math.max(0,value);save();showCoins();break;
+  case 'addScore':if(run){score=Math.max(0,Math.min(10000000,score+(value||100)));$('s').textContent=mode==='level'?`${caught}/${LV.g}`:String(score)}break;
+  case 'unlockShips':owned=SKINS.map((_,index)=>index);save();showCoins();drawShop();break;
+  case 'stormStrike':{if(!run||sclientStormCooldown>0)break;const targets=mons.map(mon=>({mon,distance:Math.hypot(mon.o.position.x-P.position.x,mon.o.position.z-P.position.z)})).filter(item=>item.distance<48).sort((a,b)=>a.distance-b.distance).slice(0,3);targets.forEach((item,index)=>{dmg(item.mon,7-index*1.2);emit(item.mon.o.position,0xa879ff,18,5)});if(targets.length){sclientStormCooldown=8;banner('CHAIN LIGHTNING!')}break}
+ }}
+});
+// Let the parent re-send the selected profile after the game API exists.
+window.parent.postMessage({type:'sclient:mods:ready'},location.origin);
+const sclientRadar=document.createElement('div');sclientRadar.textContent='CRYSTAL';sclientRadar.style.cssText='position:fixed;right:16px;top:16px;z-index:30;padding:8px 11px;border:1px solid #7dd3fc66;border-radius:8px;background:#061523dd;color:#d9fbff;font:700 11px system-ui;letter-spacing:1px;pointer-events:none;display:none';document.body.appendChild(sclientRadar);
+function updateSclientRadar(){const visible=run&&AquavoidMods.hasFeature('treasureRadar');sclientRadar.style.display=visible?'block':'none';if(visible)sclientRadar.textContent=`CRYSTAL · ${Math.round(P.position.distanceTo(X.position))}m`}
+
 function frame(now){
  const dt=Math.min((now-last)/1000,.05);last=now;t+=dt*1.4;
  const p=P.position,inputOn=run||(inHub&&!panelOpen);
  if(run){
-  el+=dt;if(mode==='level')left-=dt;base=(mode==='level'?LV.a:1.3)+Math.min(el*.01,1.8);
+  el+=dt;if(mode==='level'&&!AquavoidMods.hasFeature('freezeTimer'))left-=dt;base=(mode==='level'?LV.a:1.3)+Math.min(el*.01,1.8);
   if(el>nextSurge){surge=.4;nextSurge+=30;banner('Surge!');beep(110,.5,'sawtooth',.2)}
   surge=Math.max(0,surge-dt*.12);
  }
@@ -651,8 +804,8 @@ function frame(now){
   if(inputOn){if(K.KeyQ||K.ArrowLeft)yaw+=2*dt;if(K.KeyE||K.ArrowRight)yaw-=2*dt;if(K.ArrowUp)pitch=Math.max(.05,pitch-1.5*dt);if(K.ArrowDown)pitch=Math.min(1.4,pitch+1.5*dt)}
   const ix=inputOn?(K.KeyD?1:0)-(K.KeyA?1:0)+jx:0,iz=inputOn?(K.KeyS?1:0)-(K.KeyW?1:0)+jz:0;
   const c=Math.cos(yaw),s=Math.sin(yaw);
-  vx+=(ix*c+iz*s)*50*dt;vz+=(-ix*s+iz*c)*50*dt;
-  if(inputOn&&K.ShiftLeft&&dashCd<=0&&(ix||iz)){const l=Math.hypot(ix,iz);vx+=(ix*c+iz*s)/l*16;vz+=(-ix*s+iz*c)/l*16;dashCd=1.5;shake=.25;beep(300,.15,'square',.08);emit(p,0xe8f4ef,25,6)}
+  vx+=(ix*c+iz*s)*50*(AquavoidMods.hasFeature('tidalEngine')?1.18:1)*dt;vz+=(-ix*s+iz*c)*50*(AquavoidMods.hasFeature('tidalEngine')?1.18:1)*dt;
+  if(inputOn&&K.ShiftLeft&&(AquavoidMods.hasFeature('noDashCooldown')||dashCd<=0)&&(ix||iz)){const l=Math.hypot(ix,iz);vx+=(ix*c+iz*s)/l*16;vz+=(-ix*s+iz*c)/l*16;dashCd=1.5;shake=.25;beep(300,.15,'square',.08);emit(p,0xe8f4ef,25,6)}
   dashCd-=dt;
   const d=Math.exp(-3*dt);vx*=d;vz*=d;
   p.x+=vx*dt;p.z+=vz*dt;
@@ -665,8 +818,8 @@ function frame(now){
   const g=h(p.x,p.z,t)+.6,gv=(h(p.x,p.z,t+.02)-h(p.x,p.z,t))/.02;
   const was=grounded;grounded=false;
   if(p.y<=g){if(!was&&vy<-4){emit(p,0xff6b8a,10,4)}p.y=g;vy=Math.max(vy,gv*1.3);grounded=true}
-  if(inputOn&&K.Space&&grounded){vy=11+Math.max(gv,0);beep(520,.1,'triangle',.08)}
-  if(!grounded&&Math.hypot(vx,vz)>3&&Math.random()<.6)emit(p,0x6fd6c4,1,1.5);
+  if(inputOn&&K.Space&&grounded){vy=(AquavoidMods.hasFeature('superJump')?17:11)+Math.max(gv,0);beep(520,.1,'triangle',.08)}
+  if(!grounded&&Math.hypot(vx,vz)>3&&Math.random()<.6)emit(p,AquavoidMods.hasFeature('auroraWake')?0x9b70ff:0x6fd6c4,1,1.5);
   const sp=Math.hypot(vx,vz);if(sp>1.5){const tg=Math.atan2(-vx,-vz);let dd=tg-hd;dd=Math.atan2(Math.sin(dd),Math.cos(dd));hd+=dd*Math.min(1,dt*5)}
   const e=.6,sx=h(p.x+e,p.z,t)-h(p.x-e,p.z,t),sz=h(p.x,p.z+e,t)-h(p.x,p.z-e,t);
   const sF=(-sx*Math.sin(hd)-sz*Math.cos(hd))/(2*e),sR=(sx*Math.cos(hd)-sz*Math.sin(hd))/(2*e);
@@ -676,10 +829,11 @@ function frame(now){
  if(run){
   X.rotation.y+=dt*2;X.rotation.x+=dt;beam.position.set(X.position.x,X.position.y,X.position.z);
   comboT-=dt;if(comboT<=0&&combo){combo=0;$('cb').textContent=''}
+  if(AquavoidMods.hasFeature('crystalMagnet'))X.position.lerp(p,Math.min(1,dt*1.6));
   if(p.distanceTo(X.position)<2.6){
-   combo=comboT>0?Math.min(combo+1,9):1;comboT=7;
+   combo=comboT>0?Math.min(combo+1,AquavoidMods.hasFeature('comboReactor')?15:9):1;comboT=AquavoidMods.hasFeature('comboReactor')?10:7;
    if(teal){if(mode==='level'){left+=5;banner('+5 seconds')}else{hp=Math.min(maxhp,hp+30);banner('+30 health')}}if(mode==='endless')hp=Math.min(maxhp,hp+10);caught++;
-   score+=combo;shake=.5;emit(X.position,teal?0x2ec4b6:0xffc857,50,9);beep(500+combo*70,.2,'triangle',.18);
+   score+=combo*(AquavoidMods.hasFeature('comboReactor')?2:1);shake=.5;emit(X.position,teal?0x2ec4b6:0xffc857,50,9);beep(500+combo*70,.2,'triangle',.18);
    $('s').textContent=mode==='level'?caught+'/'+LV.g:score;$('cb').textContent=combo>1?'x'+combo:'';spawn()}
   battle(dt);if(mode==='endless')$('s').textContent=score;$('t').textContent=mode==='level'?Math.ceil(Math.max(left,0)):wave;
   if(mode==='level'&&caught>=LV.g)endRound(true);else if(hp<=0||(mode==='level'&&left<=0))endRound(false);
@@ -697,7 +851,7 @@ function frame(now){
  if(inHub&&Math.hypot(C.position.x,C.position.z)<IR+2)C.position.y=Math.max(C.position.y,18);
  C.lookAt(p.x,p.y,p.z);
  stars.position.set(p.x,0,p.z);
- R.render(S,C);requestAnimationFrame(frame)}
+ updateSclientRadar();R.render(S,C);requestAnimationFrame(frame)}
 goHome();spawn();requestAnimationFrame(frame);
 
 // ==========================================
