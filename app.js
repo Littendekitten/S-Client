@@ -12,7 +12,23 @@ const firebaseConfig = {
   measurementId: 'G-8LHG10LZYS'
 };
 
-const firebaseApp = initializeApp(firebaseConfig);
+// Keep S-Client's account in a named Firebase app. The default app name is
+// reserved for Aquavoid so same-origin game instances can reuse its persisted
+// Firebase Auth session without a second Google popup.
+// Best-effort migration: older S-Client builds stored this project's user as
+// the default Firebase app. Preserve that login when moving S-Client to a
+// named app so Aquavoid can own [DEFAULT] without signing users out.
+try {
+  const oldKey = `firebase:authUser:${firebaseConfig.apiKey}:[DEFAULT]`;
+  const newKey = `firebase:authUser:${firebaseConfig.apiKey}:sclient-account`;
+  if (!localStorage.getItem(newKey) && localStorage.getItem(oldKey)) {
+    localStorage.setItem(newKey, localStorage.getItem(oldKey));
+  }
+} catch (error) {
+  console.info('S-Client login migration was unavailable in this browser context.', error);
+}
+const firebaseApp = getApps().find(app => app.name === 'sclient-account')
+  || initializeApp(firebaseConfig, 'sclient-account');
 const firebaseAuth = getAuth(firebaseApp);
 const firestore = getFirestore(firebaseApp);
 const googleProvider = new GoogleAuthProvider();
@@ -270,8 +286,24 @@ const aquavoidFirebaseConfig = {
   appId: '1:142250543404:web:5219c5b6ddc7071e590489',
   measurementId: 'G-GWC7BJQ363'
 };
-const aquavoidFirebaseApp = getApps().find(app => app.name === 'aquavoid-game')
-  || initializeApp(aquavoidFirebaseConfig, 'aquavoid-game');
+// Aquavoid's original app.js calls initializeApp(config) with no name, which
+// means it uses [DEFAULT]. Use that exact app name here so its auth session is
+// persisted under the same Firebase key as the unmodified game running in the
+// same-origin instance iframe.
+// A previous S-Client build used the name 'aquavoid-game'. Migrate its
+// local user record to Firebase's [DEFAULT] key before the untouched Aquavoid
+// game reads that key. Existing default-app sessions are left alone.
+try {
+  const oldKey = `firebase:authUser:${aquavoidFirebaseConfig.apiKey}:aquavoid-game`;
+  const newKey = `firebase:authUser:${aquavoidFirebaseConfig.apiKey}:[DEFAULT]`;
+  if (!localStorage.getItem(newKey) && localStorage.getItem(oldKey)) {
+    localStorage.setItem(newKey, localStorage.getItem(oldKey));
+  }
+} catch (error) {
+  console.info('Aquavoid login migration was unavailable in this browser context.', error);
+}
+const aquavoidFirebaseApp = getApps().find(app => app.name === '[DEFAULT]')
+  || initializeApp(aquavoidFirebaseConfig);
 const aquavoidAuth = getAuth(aquavoidFirebaseApp);
 const aquavoidFirestore = getFirestore(aquavoidFirebaseApp);
 const aquavoidGoogleProvider = new GoogleAuthProvider();
@@ -401,9 +433,9 @@ tryAutoAquavoidSignIn = async () => {
   } catch (error) {
     console.warn('Automatic Aquavoid sign-in could not be completed:', error);
     const hints = {
-      'auth/invalid-credential': 'Google did not accept the S-Client credential for Aquavoid. Use the Connect Google account button once to link Aquavoid directly.',
-      'auth/operation-not-allowed': 'Enable Google sign-in in the AQUAVOID Firebase Authentication settings.',
-      'auth/unauthorized-domain': 'Add this GitHub Pages hostname to Authorized domains in the AQUAVOID Firebase project.'
+      'auth/invalid-credential': 'Aquavoid rejected the Google credential. The S-Client Firebase Google provider must use the same Google OAuth Web client ID that Aquavoid already accepts.',
+      'auth/operation-not-allowed': 'Google sign-in is not enabled for the Aquavoid Firebase project.',
+      'auth/unauthorized-domain': 'The Google popup must run from the top-level S-Client site, not from an about: iframe. Reload the updated S-Client deployment.'
     };
     setAquavoidStatus(hints[error?.code] || `Automatic Aquavoid sign-in failed (${error?.code || 'connection error'}). Use the button below to connect once.`, true);
   }
@@ -433,7 +465,7 @@ aquavoidSignIn.addEventListener('click', async () => {
     }
     const messages = {
       'auth/unauthorized-domain': 'Add this exact GitHub Pages hostname to Authorized domains in the AQUAVOID Firebase project.',
-      'auth/operation-not-allowed': 'Enable Google sign-in in the AQUAVOID Firebase Authentication settings.',
+      'auth/operation-not-allowed': 'Google sign-in is not enabled for the Aquavoid Firebase project.',
       'auth/popup-closed-by-user': 'Sign-in was cancelled. You can try again.',
       'auth/network-request-failed': 'A network error interrupted Google sign-in. Check your connection and retry.'
     };

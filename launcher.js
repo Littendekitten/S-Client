@@ -8,220 +8,6 @@ const versionFolder = v => `game-versions/Aquavoid-${v}/`;
 const $ = id => document.getElementById(id);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-const SCLIENT_GAME_MOD_RUNTIME = String.raw`
-;(() => {
-  try {
-    const boot = window.SCLIENT_INSTANCE || {};
-    const version = String(boot.version || '');
-    const validKey = value => /^[a-z0-9][a-z0-9._-]{1,63}$/i.test(String(value || ''));
-    const validColor = (value, fallback) => /^#[0-9a-f]{6}$/i.test(String(value || '')) ? String(value) : fallback;
-    const modSkins = [];
-
-    // Only declarative, enabled .sclient vehicle-skin data reaches this adapter.
-    // No JavaScript supplied by a mod is evaluated here.
-    for (const record of (Array.isArray(boot.mods) ? boot.mods : [])) {
-      const manifest = record && record.manifest;
-      if (!manifest || !validKey(manifest.id)) continue;
-      if (!Array.isArray(manifest.permissions) || !manifest.permissions.includes('vehicles.shipSkins')) continue;
-      const versions = Array.isArray(manifest.gameVersions) && manifest.gameVersions.length
-        ? manifest.gameVersions.map(String)
-        : (manifest.gameVersion ? [String(manifest.gameVersion)] : []);
-      if (versions.length && !versions.includes(version)) continue;
-      for (const raw of (Array.isArray(manifest.vehicleSkins) ? manifest.vehicleSkins : []).slice(0, 8)) {
-        if (!raw || !validKey(raw.id)) continue;
-        const style = ['sloop', 'catamaran', 'trimaran', 'ironclad'].includes(String(raw.style || 'sloop')) ? String(raw.style || 'sloop') : 'sloop';
-        modSkins.push({
-          id: String(raw.id),
-          name: String(raw.name || raw.id).slice(0, 48),
-          description: String(raw.description || '').slice(0, 120),
-          icon: String(raw.icon || '⛵').slice(0, 4),
-          style,
-          hullColor: validColor(raw.hullColor, '#805232'),
-          sailColor: validColor(raw.sailColor, '#f6efe0'),
-          flagColor: validColor(raw.flagColor, '#ff6b8a'),
-          glowColor: validColor(raw.glowColor, '#b6e2ee'),
-          accentColor: validColor(raw.accentColor, '#d9b45a'),
-          logo: /^data:image\/png;base64,[A-Za-z0-9+/=]{1,60000}$/.test(String(raw.logo || '')) ? String(raw.logo) : '',
-          modId: String(manifest.id),
-          modName: String(manifest.name || manifest.id).slice(0, 70),
-          modSkinId: String(manifest.id) + ':' + String(raw.id)
-        });
-      }
-    }
-
-    if (!modSkins.length || typeof THREE === 'undefined' || typeof P === 'undefined' || typeof applySkin !== 'function' || typeof drawShop !== 'function') {
-      return;
-    }
-
-    const instanceId = String(boot.id || 'standalone').replace(/[^a-z0-9_-]/gi, '');
-    const storageKey = 'sclient:ship-skin:' + instanceId;
-    let selectedId = '';
-    try { selectedId = localStorage.getItem(storageKey) || ''; } catch (_) {}
-    let activeModSkin = modSkins.find(skin => skin.modSkinId === selectedId) || null;
-    if (!activeModSkin && selectedId) {
-      try { localStorage.removeItem(storageKey); } catch (_) {}
-    }
-
-    function renderModShip(skin) {
-      while (P.children.length) P.remove(P.children[0]);
-      const ironclad = skin.style === 'ironclad';
-      const hullMaterial = new THREE.MeshStandardMaterial({
-        color: skin.hullColor,
-        metalness: ironclad ? 0.62 : 0.18,
-        roughness: ironclad ? 0.34 : 0.72
-      });
-      const accentMaterial = new THREE.MeshStandardMaterial({ color: skin.accentColor, metalness: 0.48, roughness: 0.42 });
-      const glowMaterial = new THREE.MeshStandardMaterial({
-        color: skin.glowColor, emissive: skin.glowColor, emissiveIntensity: 0.55, metalness: 0.28, roughness: 0.32
-      });
-      const sailMaterial = new THREE.MeshStandardMaterial({ color: skin.sailColor, roughness: 0.78, side: THREE.DoubleSide });
-      const add = (geometry, material, x, y, z) => {
-        const mesh = new THREE.Mesh(geometry, material);
-        mesh.position.set(x, y, z);
-        P.add(mesh);
-        return mesh;
-      };
-
-      add(new THREE.BoxGeometry(1.4, 0.48, 3.15), hullMaterial, 0, 0.08, 0);
-      const bowGeometry = new THREE.ConeGeometry(0.99, 1.5, 4);
-      bowGeometry.rotateY(Math.PI / 4);
-      bowGeometry.rotateX(-Math.PI / 2);
-      const bow = add(bowGeometry, hullMaterial, 0, 0.08, -2.0);
-      bow.scale.y = 0.48 / 1.4;
-      add(new THREE.BoxGeometry(1.18, 0.12, 2.3), accentMaterial, 0, 0.37, 0.12);
-
-      const hullCount = skin.style === 'trimaran' ? 3 : skin.style === 'catamaran' ? 2 : 1;
-      if (hullCount > 1) {
-        for (let i = 0; i < hullCount; i++) {
-          const side = i - (hullCount - 1) / 2;
-          if (Math.abs(side) < 0.01) continue;
-          add(new THREE.BoxGeometry(0.34, 0.34, 2.9), hullMaterial, side * 0.9, 0.02, 0.05);
-          add(new THREE.BoxGeometry(0.09, 0.1, 2.55), glowMaterial, side * 0.9, 0.21, 0.02);
-        }
-      }
-
-      if (ironclad) {
-        for (const side of [-1, 1]) {
-          add(new THREE.BoxGeometry(0.08, 0.22, 2.8), accentMaterial, side * 0.66, 0.46, 0.04);
-          const port = add(new THREE.CylinderGeometry(0.11, 0.11, 0.34, 10), glowMaterial, side * 0.55, 0.62, -1.05);
-          port.rotation.z = Math.PI / 2;
-        }
-      }
-
-      add(new THREE.CylinderGeometry(0.055, 0.065, 3.8, 8), hullMaterial, 0, 2.05, -0.08);
-      const sail = add(new THREE.PlaneGeometry(ironclad ? 1.5 : 2.0, 2.45), sailMaterial, 0, 2.15, -0.18);
-      sail.rotation.y = 0;
-      for (const side of [-1, 1]) add(new THREE.BoxGeometry(0.045, 2.45, 0.06), glowMaterial, side * 0.99, 2.16, -0.18);
-      const flag = add(new THREE.PlaneGeometry(0.55, 0.3), new THREE.MeshBasicMaterial({ color: skin.flagColor, side: THREE.DoubleSide }), 0.28, 3.55, -0.08);
-
-      const badgeCanvas = document.createElement('canvas');
-      badgeCanvas.width = badgeCanvas.height = 128;
-      const context = badgeCanvas.getContext('2d');
-      context.fillStyle = skin.flagColor;
-      context.beginPath(); context.arc(64, 64, 56, 0, Math.PI * 2); context.fill();
-      context.fillStyle = '#ffffff'; context.font = 'bold 66px sans-serif';
-      context.textAlign = 'center'; context.textBaseline = 'middle'; context.fillText(skin.icon || '⛵', 64, 68);
-      const badgeTexture = new THREE.CanvasTexture(badgeCanvas);
-      if (THREE.sRGBEncoding !== undefined) badgeTexture.encoding = THREE.sRGBEncoding;
-      const badge = add(new THREE.PlaneGeometry(0.75, 0.75), new THREE.MeshBasicMaterial({ map: badgeTexture, transparent: true, side: THREE.DoubleSide, depthWrite: false }), 0, 2.18, -0.31);
-      if (skin.logo) {
-        const logoImage = new Image();
-        logoImage.onload = () => {
-          context.clearRect(0, 0, 128, 128);
-          context.fillStyle = '#ffffff'; context.beginPath(); context.arc(64, 64, 58, 0, Math.PI * 2); context.fill();
-          context.save(); context.beginPath(); context.arc(64, 64, 54, 0, Math.PI * 2); context.clip();
-          context.drawImage(logoImage, 6, 6, 116, 116); context.restore();
-          badgeTexture.needsUpdate = true;
-        };
-        logoImage.src = skin.logo;
-      }
-      // Retain references on the player group for predictable cleanup/debugging.
-      P.userData = P.userData || {};
-      P.userData.sclientModShipSkinId = skin.modSkinId;
-    }
-
-    function persistSelection() {
-      try {
-        if (activeModSkin) localStorage.setItem(storageKey, activeModSkin.modSkinId);
-        else localStorage.removeItem(storageKey);
-      } catch (error) { console.warn('Could not save selected S-Client ship skin:', error); }
-    }
-
-    const originalApplySkin = applySkin;
-    const originalDrawShop = drawShop;
-    applySkin = function (index) {
-      if (activeModSkin) {
-        try { renderModShip(activeModSkin); return; }
-        catch (error) {
-          console.error('S-Client could not render the enabled mod ship skin:', error);
-          activeModSkin = null;
-          persistSelection();
-        }
-      }
-      return originalApplySkin(index);
-    };
-
-    drawShop = function () {
-      originalDrawShop();
-      const grid = $('grid');
-      if (!grid) return;
-      const baseButtons = Array.from(grid.querySelectorAll('button'));
-      for (const button of baseButtons) {
-        if (button.dataset.sclientBaseSkinWrapped === '1') continue;
-        const previousClick = button.onclick;
-        if (typeof previousClick !== 'function') continue;
-        button.dataset.sclientBaseSkinWrapped = '1';
-        button.onclick = function (event) {
-          activeModSkin = null;
-          persistSelection();
-          return previousClick.call(this, event);
-        };
-      }
-      if (activeModSkin) baseButtons.forEach(button => button.classList.remove('on'));
-
-      for (const skin of modSkins) {
-        const button = document.createElement('button');
-        const isSelected = !!activeModSkin && activeModSkin.modSkinId === skin.modSkinId;
-        button.type = 'button';
-        button.className = 'sk' + (isSelected ? ' on' : '');
-        const hullSwatch = document.createElement('i');
-        hullSwatch.style.backgroundColor = skin.hullColor;
-        const sailSwatch = document.createElement('i');
-        sailSwatch.style.backgroundColor = skin.sailColor;
-        const name = document.createElement('span');
-        name.textContent = skin.name;
-        const source = document.createElement('small');
-        source.textContent = 'MOD · ' + skin.modName;
-        const status = document.createElement('small');
-        status.textContent = isSelected ? 'Equipped' : 'Equip';
-        button.append(hullSwatch, sailSwatch, name, source, status);
-        button.addEventListener('click', () => {
-          activeModSkin = skin;
-          persistSelection();
-          try {
-            renderModShip(skin);
-            const note = $('note');
-            if (note) note.textContent = skin.name + ' equipped from ' + skin.modName + '.';
-            drawShop();
-          } catch (error) {
-            console.error('S-Client mod ship skin failed:', error);
-            activeModSkin = null;
-            persistSelection();
-            originalApplySkin(typeof sel === 'number' ? sel : 0);
-          }
-        });
-        grid.appendChild(button);
-      }
-    };
-
-    if (activeModSkin) renderModShip(activeModSkin);
-  } catch (error) {
-    console.error('S-Client mod runtime could not start; the unmodified Aquavoid game will continue:', error);
-  }
-})();
-`;
-
-
 let instances = [];
 let activeInstanceId = null;
 let installing = false;
@@ -260,10 +46,9 @@ async function idb(mode, fn) {
     tx.onerror = () => reject(tx.error);
   });
 }
-const gameFileKey = (id, name) => `${id}/clean-source-v1/${name}`;
-const putFile = (id, name, text) => idb('readwrite', s => s.put(text, gameFileKey(id, name)));
-const getFile = (id, name) => idb('readonly', s => s.get(gameFileKey(id, name)));
-const deleteFiles = id => idb('readwrite', s => VERSION_FILES.forEach(n => { s.delete(gameFileKey(id, n)); s.delete(`${id}/${n}`); }));
+const putFile = (id, name, text) => idb('readwrite', s => s.put(text, `${id}/${name}`));
+const getFile = (id, name) => idb('readonly', s => s.get(`${id}/${name}`));
+const deleteFiles = id => idb('readwrite', s => VERSION_FILES.forEach(n => s.delete(`${id}/${n}`)));
 
 async function downloadVersion(version, id, onProgress) {
   const base = versionFolder(version);
@@ -294,41 +79,21 @@ function clearFrame() {
 }
 async function mountInstance(inst) {
   clearFrame();
-  let files = {};
-  for (const name of VERSION_FILES) files[name] = await getFile(inst.id, name);
-  if (VERSION_FILES.some(n => !files[n])) {
-    toast('Re-downloading missing game files…');
-    await downloadVersion(inst.version, inst.id);
-    for (const name of VERSION_FILES) files[name] = await getFile(inst.id, name);
-  }
-  const cssUrl = URL.createObjectURL(new Blob([files['style.css']], { type: 'text/css' }));
-  // Hand this instance's enabled mods to the game page before its script runs.
-  let enabledMods = [];
-  try {
-    const stored = await window.SClientCloud.loadInstanceMods(inst.id);
-    const supportsVersion = manifest => {
-      const versions = Array.isArray(manifest?.gameVersions) && manifest.gameVersions.length
-        ? manifest.gameVersions.map(String)
-        : (manifest?.gameVersion ? [String(manifest.gameVersion)] : []);
-      return !versions.length || versions.includes(String(inst.version));
-    };
-    enabledMods = stored
-      .filter(m => m && m.enabled && m.manifest && supportsVersion(m.manifest))
-      .map(m => ({ manifest: m.manifest, featureStates: m.featureStates || {}, settings: m.settings || {} }));
-  } catch (err) { console.warn('Could not load instance mods:', err); }
-  const gameModule = files['app.js'] + '\n/* S-Client declarative mod runtime; source game files remain untouched. */\n' + SCLIENT_GAME_MOD_RUNTIME;
-  const jsUrl = URL.createObjectURL(new Blob([gameModule], { type: 'text/javascript' }));
-  frameUrls.push(cssUrl, jsUrl);
-  let html = files['index.html']
-    .replace(/<link[^>]*href=["']style\.css["'][^>]*>/i, `<link rel="stylesheet" href="${cssUrl}">`)
-    .replace(/<script[^>]*src=["']app\.js["'][^>]*>\s*<\/script>/i, `<script type="module" src="${jsUrl}"><\/script>`);
-  const bootData = JSON.stringify({ id: inst.id, name: inst.name, version: inst.version, mods: enabledMods }).replace(/</g, '\\u003c');
-  html = html.replace(/<script[^>]*src=["']blob:/i, m => `<script>window.SCLIENT_INSTANCE=${bootData};<\/script>${m}`);
+
+  // Do not use srcdoc or Blob URLs for the game document. Firebase Auth checks
+  // the page origin during OAuth flows; srcdoc gives the game an about:srcdoc
+  // URL, which causes "Invalid URI scheme in origin: about". Serving the
+  // original game page from this S-Client origin also lets it share the
+  // [DEFAULT] Aquavoid Firebase Auth session created by the launcher.
+  const gameUrl = new URL(versionFolder(inst.version) + 'index.html', document.baseURI);
+  gameUrl.searchParams.set('sclientInstance', inst.id);
+
   const frame = document.createElement('iframe');
   frame.title = inst.name;
   frame.allow = 'fullscreen; autoplay; clipboard-write';
+  frame.allowFullscreen = true;
   frame.setAttribute('allowfullscreen', '');
-  frame.srcdoc = html;
+  frame.src = gameUrl.href;
   const wrap = $('instanceFrameWrap');
   wrap.appendChild(frame);
 
@@ -588,6 +353,13 @@ function flushPlaytime() {
 async function launch(id) {
   const inst = instances.find(i => i.id === id);
   if (!inst) return;
+  // Authenticate in the top-level S-Client document first. Never make the
+  // original Aquavoid login popup run from an embedded about/srcdoc context.
+  if (!window.AQUAVOID_BOOT?.authenticated) {
+    toast('Connect your Aquavoid account in the Play tab before launching an instance.');
+    goto('play');
+    return;
+  }
   if (activeInstanceId && activeInstanceId !== id) flushPlaytime();
   if (activeInstanceId !== id) {
     try { await mountInstance(inst); }
