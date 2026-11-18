@@ -1,5 +1,5 @@
 
-import { initializeApp, getApps, getApp } from "https://www.gstatic.com/firebasejs/12.17.1/firebase-app.js";
+import { initializeApp, getApps, getApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
 
 import {
     getAuth,
@@ -7,11 +7,10 @@ import {
     onAuthStateChanged,
     setPersistence,
     browserLocalPersistence,
-    signInWithPopup,
     signInWithRedirect,
     getRedirectResult,
     signOut
-} from "https://www.gstatic.com/firebasejs/12.17.1/firebase-auth.js";
+} from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
 
 import {
     getFirestore,
@@ -26,7 +25,7 @@ import {
     limit,
     getDocs,
     onSnapshot
-} from "https://www.gstatic.com/firebasejs/12.17.1/firebase-firestore.js";
+} from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 
 const sclientThreeReady = await (window.__aquavoidThreeReady || Promise.resolve(!!window.THREE));
 if (!sclientThreeReady || !window.THREE) {
@@ -94,7 +93,7 @@ const firebaseApp = getApps().length
 const auth = getAuth(firebaseApp);
 const firestoreDb = getFirestore(firebaseApp);
 
-import('https://www.gstatic.com/firebasejs/12.17.1/firebase-analytics.js')
+import('https://www.gstatic.com/firebasejs/12.19.0/firebase-analytics.js')
     .then(async m => {
         if (await m.isSupported()) m.getAnalytics(firebaseApp);
     })
@@ -2193,21 +2192,11 @@ if (googleSignInButton && !EMBEDDED_IN_SCLIENT) {
 
         try {
             await setPersistence(auth, browserLocalPersistence);
-            await signInWithPopup(auth, googleProvider);
+            $('authStatus').textContent = 'Redirecting to Google securely…';
+            await signInWithRedirect(auth, googleProvider);
 
         } catch (error) {
             console.error('Google sign-in failed:', error);
-
-            if (
-                error.code === 'auth/popup-blocked' ||
-                error.code === 'auth/operation-not-supported-in-this-environment'
-            ) {
-                $('authStatus').textContent =
-                    'Popup blocked, redirecting to Google...';
-
-                await signInWithRedirect(auth, googleProvider);
-                return;
-            }
 
             const hints = {
                 'auth/unauthorized-domain':
@@ -2224,7 +2213,6 @@ if (googleSignInButton && !EMBEDDED_IN_SCLIENT) {
                 hints[error.code] || ('Login failed: ' + error.message);
 
         } finally {
-            clearTimeout(stuckTimer);
             googleSignInButton.disabled = false;
         }
     });
@@ -2298,7 +2286,7 @@ onAuthStateChanged(auth, async user => {
     }
 });
 
-// Finish a redirect sign-in if a popup was blocked.
+// Finish the Google redirect sign-in on return.
 if (!EMBEDDED_IN_SCLIENT) getRedirectResult(auth).catch(error => {
     console.warn('Redirect sign-in failed:', error);
 });

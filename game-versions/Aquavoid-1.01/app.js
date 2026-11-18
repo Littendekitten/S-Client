@@ -1,4 +1,4 @@
-import { initializeApp, getApps, getApp } from "https://www.gstatic.com/firebasejs/12.17.1/firebase-app.js";
+import { initializeApp, getApps, getApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
 
 import {
     getAuth,
@@ -6,11 +6,10 @@ import {
     onAuthStateChanged,
     setPersistence,
     browserLocalPersistence,
-    signInWithPopup,
     signInWithRedirect,
     getRedirectResult,
     signOut
-} from "https://www.gstatic.com/firebasejs/12.17.1/firebase-auth.js";
+} from "https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js";
 
 import {
     getFirestore,
@@ -24,7 +23,7 @@ import {
     orderBy,
     limit,
     getDocs
-} from "https://www.gstatic.com/firebasejs/12.17.1/firebase-firestore.js";
+} from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 
 const sclientThreeReady = await (window.__aquavoidThreeReady || Promise.resolve(!!window.THREE));
 if (!sclientThreeReady || !window.THREE) {
@@ -94,7 +93,7 @@ const firestoreDb = getFirestore(firebaseApp);
 
 // Analytics is optional: load it in the background so an ad-blocker
 // or a slow network can never stop the game from starting.
-import('https://www.gstatic.com/firebasejs/12.17.1/firebase-analytics.js')
+import('https://www.gstatic.com/firebasejs/12.19.0/firebase-analytics.js')
     .then(async m => {
         if (await m.isSupported()) m.getAnalytics(firebaseApp);
     })
@@ -872,16 +871,7 @@ if (EMBEDDED_IN_SCLIENT) {
 if (googleSignInButton && !EMBEDDED_IN_SCLIENT) {
     googleSignInButton.addEventListener('click', async () => {
         googleSignInButton.disabled = true;
-        $('authStatus').textContent = 'Opening Google sign-in window... (allow popups for this site)';
-
-        // If the popup finishes/closes but the browser blocks the result, the
-        // promise never settles and the button stays stuck on a loading cursor.
-        const stuckTimer = setTimeout(() => {
-            googleSignInButton.disabled = false;
-            if (!auth.currentUser) {
-                $('authStatus').textContent = 'Sign-in did not finish. Click the button to try again.';
-            }
-        }, 45000);
+        $('authStatus').textContent = 'Redirecting to Google securely…';
 
         try {
             await setPersistence(
@@ -889,17 +879,11 @@ if (googleSignInButton && !EMBEDDED_IN_SCLIENT) {
                 browserLocalPersistence
             );
 
-            await signInWithPopup(auth, googleProvider);
+            $('authStatus').textContent = 'Redirecting to Google securely…';
+            await signInWithRedirect(auth, googleProvider);
 
         } catch (error) {
             console.error('Google sign-in failed:', error);
-
-            if (error.code === 'auth/popup-blocked' ||
-                error.code === 'auth/operation-not-supported-in-this-environment') {
-                $('authStatus').textContent = 'Popup blocked, redirecting to Google...';
-                await signInWithRedirect(auth, googleProvider);
-                return;
-            }
 
             const hints = {
                 'auth/unauthorized-domain':
@@ -914,7 +898,6 @@ if (googleSignInButton && !EMBEDDED_IN_SCLIENT) {
                 hints[error.code] || ('Login failed: ' + error.message);
 
         } finally {
-            clearTimeout(stuckTimer);
             googleSignInButton.disabled = false;
         }
     });
@@ -970,5 +953,5 @@ onAuthStateChanged(auth, async user => {
     }
 });
 
-// finish a redirect sign-in (used when popups are blocked)
+// finish the Google redirect sign-in on return
 if (!EMBEDDED_IN_SCLIENT) getRedirectResult(auth).catch(error => console.warn('Redirect sign-in failed:', error));

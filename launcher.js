@@ -4,7 +4,7 @@ const MAX_INSTANCES = 3;
 const SUPPORTED_VERSIONS = ['1.0', '1.01'];
 // Game versions are hosted in this repo's GitHub Pages root: /game-versions/Aquavoid-<version>/
 const VERSION_FILES = ['index.html', 'app.js', 'style.css'];
-const INSTANCE_CACHE_REVISION = 'sclient-mod-bridge-2026-11-18-r2';
+const INSTANCE_CACHE_REVISION = 'sclient-auth-redirect-2026-11-18-r3';
 const versionFolder = v => `game-versions/Aquavoid-${v}/`;
 const $ = id => document.getElementById(id);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));

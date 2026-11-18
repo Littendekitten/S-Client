@@ -1,5 +1,5 @@
 import { initializeApp, getApps } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
-import { getAuth, GoogleAuthProvider, signInWithRedirect, signInWithPopup, initializeAuth, browserPopupRedirectResolver, getRedirectResult, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, browserSessionPersistence } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
+import { getAuth, GoogleAuthProvider, signInWithRedirect, initializeAuth, browserPopupRedirectResolver, getRedirectResult, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, browserSessionPersistence } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, serverTimestamp, collection, query, where, orderBy, limit, getDocs } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 const firebaseConfig = {
@@ -39,36 +39,37 @@ let cloudPendingWrites = 0;
 let cloudWriteError = null;
 let cloudHasSaved = false;
 
-// Popup first (works on custom domains where redirect state is blocked by
-// browser storage partitioning), redirect only as a fallback.
+// Use a top-level redirect for Google OAuth. Popup flows inspect popup.closed
+// and popup.close; browsers applying Cross-Origin-Opener-Policy can sever that
+// window reference and leave Firebase's popup observer stuck indefinitely.
+// Redirect auth avoids that cross-window handshake entirely. The pending
+// instance ID is held in sessionStorage by launcher.js and resumes on return.
 async function googleSignIn(auth, provider) {
-  try {
-    await signInWithPopup(auth, provider);
-  } catch (error) {
-    const fallback = ['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment', 'auth/web-storage-unsupported'];
-    if (fallback.includes(error?.code)) { await signInWithRedirect(auth, provider); return; }
-    throw error;
-  }
+  await signInWithRedirect(auth, provider);
 }
 
 // Registered immediately so the button works while the rest of startup is still loading.
 signInButton.addEventListener('click', async () => {
   signInButton.disabled = true;
-  showAuthMessage('Opening Google sign-in…');
+  showAuthMessage('Redirecting to Google securely…');
+  const rescueTimer = window.setTimeout(() => {
+    signInButton.disabled = false;
+    showAuthMessage('Google sign-in did not redirect. Check your connection and try again.', true);
+  }, 15000);
   try {
     await googleSignIn(firebaseAuth, googleProvider);
   } catch (error) {
     console.error('Google sign-in failed:', error);
-    signInButton.disabled = false;
     const messages = {
       'auth/unauthorized-domain': 'Add this exact S-Client website hostname to Authorized domains in the S-Client Firebase project.',
       'auth/operation-not-allowed': 'Enable the Google provider in S-Client Firebase Authentication.',
       'auth/invalid-api-key': 'The S-Client Firebase API key is invalid or restricted.',
-      'auth/network-request-failed': 'Network error while contacting Google/Firebase. Check your connection and try again.',
-      'auth/popup-closed-by-user': 'Sign-in window was closed. Click the button to try again.',
-      'auth/cancelled-popup-request': 'Sign-in was cancelled. Click the button to try again.'
+      'auth/network-request-failed': 'Network error while contacting Google/Firebase. Check your connection and try again.'
     };
     showAuthMessage(messages[error?.code] || `Google sign-in failed (${error?.code || 'unknown error'}): ${error.message}`, true);
+  } finally {
+    window.clearTimeout(rescueTimer);
+    signInButton.disabled = false;
   }
 });
 
@@ -251,8 +252,7 @@ async function tryBootstrap(user) {
   }
 }
 
-// Resolve a pending redirect sign-in on page return. Redirect is the fallback
-// for browsers/extensions that block Firebase's popup flow.
+// Resolve a pending Google redirect sign-in on page return.
 try {
   const redirectResult = await Promise.race([getRedirectResult(firebaseAuth), new Promise(resolve => setTimeout(resolve, 4000))]);
 } catch (error) {
@@ -336,20 +336,10 @@ try {
 // Use the Aquavoid project's Firestore instance for player saves and leaderboard
 // reads/writes. This must be initialized separately from S-Client's Firestore.
 const aquavoidFirestore = getFirestore(aquavoidFirebaseApp);
-// Restore Aquavoid's existing [DEFAULT] session on startup and migrate it to
-// local persistence when available. Fall back to tab/session persistence only
-// when the browser refuses durable storage.
-const aquavoidPersistenceReady = (async () => {
-  try {
-    await setPersistence(aquavoidAuth, browserLocalPersistence);
-    return 'local';
-  } catch (localError) {
-    console.warn('Aquavoid local auth persistence is unavailable; trying session persistence.', localError);
-    await setPersistence(aquavoidAuth, browserSessionPersistence);
-    return 'session';
-  }
-})();
-await aquavoidPersistenceReady;
+// initializeAuth above already configures the [DEFAULT] Aquavoid session with
+// browserLocalPersistence. Do not run a second persistence migration here:
+// waiting for it before registering the Auth observer can strand step 2 on
+// storage-restricted browsers.
 const aquavoidGoogleProvider = new GoogleAuthProvider();
 // Do not force prompt=select_account on every reconnect. Firebase's persisted
 // user is authoritative; when a token really expires Google can reuse the
@@ -367,30 +357,8 @@ let aquavoidAuthRevision = 0;
 let aquavoidSaveQueue = Promise.resolve();
 let aquavoidWriteError = null;
 window.AQUAVOID_BOOT = { authenticated: false, gameSave: null, uid: null, cloudReady: false };
-// Firestore auth can resolve before the game API has finished initializing.
-// Wait for the game API before applying the cloud save or creating a new save.
-let resolveAquavoidGameReady;
-let aquavoidGameReadyResolved = false;
-function resolveGameReady(api) {
-  if (aquavoidGameReadyResolved) return;
-  aquavoidGameReadyResolved = true;
-  resolveAquavoidGameReady(api);
-}
-function unavailableAquavoidGameApi(reason) {
-  console.warn('Embedded Aquavoid renderer unavailable; the launcher iframe can still be used.', reason || 'unknown renderer error');
-  return Object.freeze({
-    available: false,
-    loadSave: () => false,
-    save: async () => false,
-    syncLeaderboard: async () => false,
-    getState: () => Object.freeze({ running:false, paused:false, rendererAvailable:false }),
-    getFeature: () => false
-  });
-}
-const aquavoidGameReady = new Promise(resolve => { resolveAquavoidGameReady = resolve; });
-// Protect the Firebase login flow from an unexpected renderer/module failure
-// elsewhere in this large game module. A real renderer resolves this first.
-window.setTimeout(() => resolveGameReady(unavailableAquavoidGameApi('startup timed out')), 16000);
+// The legacy parent-page renderer is hidden while the launcher iframe is
+// active. Authentication and instance launch do not depend on its startup.
 
 function setAquavoidStatus(message, error = false) {
   if (!aquavoidStatus) return;
@@ -493,9 +461,12 @@ window.AquavoidCloud = {
 
 aquavoidSignIn.addEventListener('click', async () => {
   aquavoidSignIn.disabled = true;
-  setAquavoidStatus('Opening Google sign-in…');
+  setAquavoidStatus('Redirecting to Google securely…');
+  const rescueTimer = window.setTimeout(() => {
+    aquavoidSignIn.disabled = false;
+    setAquavoidStatus('Google sign-in did not redirect. Check your connection and try again.', true);
+  }, 15000);
   try {
-    await aquavoidPersistenceReady;
     await googleSignIn(aquavoidAuth, aquavoidGoogleProvider);
   } catch (error) {
     console.error('Aquavoid Google redirect sign-in failed:', error);
@@ -505,6 +476,8 @@ aquavoidSignIn.addEventListener('click', async () => {
       'auth/network-request-failed': 'A network error interrupted Google sign-in. Check your connection and retry.'
     };
     setAquavoidStatus(messages[error?.code] || `Aquavoid sign-in failed (${error?.code || 'unknown error'}): ${error.message}`, true);
+  } finally {
+    window.clearTimeout(rescueTimer);
     aquavoidSignIn.disabled = false;
   }
 });
@@ -542,14 +515,13 @@ async function onAquavoidUser(user) {
   const revision = ++aquavoidAuthRevision;
   aquavoidUser = user;
   aquavoidCloudReady = false;
+
   if (!user) {
     window.AQUAVOID_BOOT = { authenticated: false, gameSave: null, uid: null, cloudReady: false };
     paintAquavoidAccount(false);
     setAquavoidStatus('Step 2 of 2: connect your Aquavoid Google account to open S-Client.');
     aquavoidRetry.hidden = true;
     if (aquavoidCloudRetry) aquavoidCloudRetry.hidden = true;
-    // Only a real Firebase Auth sign-out returns the user to the second login
-    // step. Firestore errors below must never be treated as an Auth sign-out.
     clientShell.style.display = 'none';
     authGate.hidden = false;
     sclientAuthStep.hidden = true;
@@ -558,10 +530,10 @@ async function onAquavoidUser(user) {
     return;
   }
 
-  // Authentication and Firestore availability are separate states. Mark the
-  // account connected as soon as Firebase Auth confirms the user, then load
-  // the save. A failed Firestore read must not ask the user to authenticate
-  // again or create an endless Google redirect loop.
+  // Firebase Auth is the access gate. Do not hold the launcher behind the
+  // hidden parent-page renderer or a Firestore read: the actual game runs in
+  // its own iframe and loads its save there. Cloud save availability is a
+  // separate, recoverable state.
   window.AQUAVOID_BOOT = {
     authenticated: true,
     gameSave: null,
@@ -569,21 +541,35 @@ async function onAquavoidUser(user) {
     displayName: user.displayName || '',
     cloudReady: false
   };
-  setAquavoidStatus('Aquavoid account verified. Loading your Aquavoid Firestore save…');
-  if (aquavoidCloudRetry) aquavoidCloudRetry.hidden = true;
+  paintAquavoidAccount(true, user);
+  authGate.hidden = true;
+  clientShell.style.display = 'flex';
+  setAquavoidStatus('Aquavoid account verified. Opening S-Client while checking your cloud save…');
   if (aquavoidRetry) aquavoidRetry.hidden = true;
+  if (aquavoidCloudRetry) aquavoidCloudRetry.hidden = true;
+  window.dispatchEvent(new CustomEvent('sclient:aquavoid-ready', {
+    detail: { uid: user.uid, cloudReady: false }
+  }));
 
+  // This read updates account status only. It is deliberately non-blocking for
+  // Play; the selected game iframe independently loads and saves the player's
+  // actual game data using the same authenticated Firebase project.
   try {
-    const saveRef = doc(aquavoidFirestore, 'players', user.uid);
-    const snapshot = await getDoc(saveRef);
-    // Do not treat an unfinished game boot as a missing player save. The old
-    // code could see gameSave === null while this read was still in flight and
-    // write default progress over the account's real save.
-    const gameApi = await aquavoidGameReady;
-    // Ignore a stale response if the account was switched while the request
-    // or game initialization was in flight.
+    let cloudTimeout;
+    const snapshot = await Promise.race([
+      getDoc(doc(aquavoidFirestore, 'players', user.uid)),
+      new Promise((_, reject) => {
+        cloudTimeout = window.setTimeout(() => {
+          const error = new Error('The Aquavoid cloud save check took too long.');
+          error.code = 'sclient/cloud-timeout';
+          reject(error);
+        }, 10000);
+      })
+    ]).finally(() => window.clearTimeout(cloudTimeout));
+
     if (revision !== aquavoidAuthRevision || aquavoidAuth.currentUser?.uid !== user.uid) return;
     const gameSave = snapshot.exists() ? (snapshot.data() || {}) : null;
+    aquavoidCloudReady = true;
     window.AQUAVOID_BOOT = {
       authenticated: true,
       gameSave,
@@ -591,25 +577,12 @@ async function onAquavoidUser(user) {
       displayName: user.displayName || '',
       cloudReady: true
     };
-    aquavoidCloudReady = true;
-    paintAquavoidAccount(true, user);
-    gameApi.loadSave(gameSave);
-    if (!snapshot.exists()) await gameApi.save();
-    else if (gameApi.syncLeaderboard) {
-      // Backfill existing Endless records into the leaderboard collection on
-      // sign-in, so returning players do not need to earn another record.
-      try { await gameApi.syncLeaderboard(); }
-      catch (error) { console.warn('Existing Aquavoid leaderboard record could not be synced:', error); }
-    }
-    setAquavoidStatus('Aquavoid account and cloud save connected successfully.');
+    setAquavoidStatus('Aquavoid account connected. Cloud save service is available.');
     if (aquavoidCloudRetry) aquavoidCloudRetry.hidden = true;
-    authGate.hidden = true;
-    clientShell.style.display = 'flex';
-    window.dispatchEvent(new CustomEvent('sclient:aquavoid-ready', { detail: { uid: user.uid, cloudReady: true } }));
+    const label = document.getElementById('aquavoidAccountLabel');
+    if (label) label.textContent = 'AQUAVOID ACCOUNT CONNECTED · CLOUD READY';
   } catch (error) {
     if (revision !== aquavoidAuthRevision || aquavoidAuth.currentUser?.uid !== user.uid) return;
-    // Keep the successful Auth session. The player can enter the launcher and
-    // retry cloud sync without another Google sign-in.
     aquavoidCloudReady = false;
     window.AQUAVOID_BOOT = {
       authenticated: true,
@@ -619,19 +592,16 @@ async function onAquavoidUser(user) {
       cloudReady: false,
       cloudError: error?.code || 'unknown'
     };
-    paintAquavoidAccount(true, user);
     const detail = error?.code === 'permission-denied'
       ? 'Aquavoid account connected, but Firestore denied the player save read. Check the players/{uid} read rule.'
-      : `Aquavoid account connected, but the cloud save could not load (${error?.code || 'connection error'}): ${error.message}`;
+      : `Aquavoid account connected. Cloud save is temporarily unavailable (${error?.code || 'connection error'}): ${error.message}`;
     setAquavoidStatus(detail, true);
     const label = document.getElementById('aquavoidAccountLabel');
     if (label) label.textContent = 'AQUAVOID ACCOUNT CONNECTED · CLOUD SAVE OFFLINE';
     if (aquavoidCloudRetry) aquavoidCloudRetry.hidden = false;
-    // The two-account access gate is satisfied by the authenticated user.
-    // Cloud-save errors are shown as a recoverable warning, not a login gate.
+    // Keep the launcher open: retrying cloud access must not require another login.
     authGate.hidden = true;
     clientShell.style.display = 'flex';
-    window.dispatchEvent(new CustomEvent('sclient:aquavoid-ready', { detail: { uid: user.uid, cloudReady: false, error: error?.code || 'unknown' } }));
   }
 }
 
@@ -689,7 +659,6 @@ if (!threeReady || !window.THREE) {
     loadingCover.className = 'renderer-error';
     loadingCover.textContent = 'Aquavoid could not load its 3D renderer. Check your connection to the Three.js CDN and reload this page.';
     console.error('S-Client: Three.js did not load.');
-    resolveGameReady(unavailableAquavoidGameApi('Three.js did not load'));
     return;
 }
 const $stage = $('gameStage');
@@ -701,7 +670,6 @@ try {
     loadingCover.className = 'renderer-error';
     loadingCover.textContent = 'Aquavoid needs WebGL. Enable hardware acceleration in Chrome, then reload S-Client.';
     console.error('S-Client WebGL initialization failed:', error);
-    resolveGameReady(unavailableAquavoidGameApi(error));
     return;
 }
 R.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -4673,7 +4641,6 @@ window.AquavoidGame = Object.freeze({
     unlockShips: () => { owned = SKINS.map((_, index) => index); save(); showCoins(); drawShop(); },
     getFeature: id => modFlag(String(id))
 });
-resolveGameReady(window.AquavoidGame);
 
 // Keep toolbar and menu state in sync with the game view.
 $('modePill').textContent = 'MENU';
