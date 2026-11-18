@@ -1,0 +1,29 @@
+{
+  "format": "sclient-mod",
+  "formatVersion": 2,
+  "language": "SCL",
+  "languageVersion": 1,
+  "id": "betteresc",
+  "name": "BetterESC",
+  "version": "1.0.0",
+  "author": "KitaCat",
+  "game": "aquavoid",
+  "gameVersion": "1.0",
+  "gameVersions": [
+    "1.0",
+    "1.01"
+  ],
+  "description": "Press Escape to release the mouse cursor without triggering the game pause action.",
+  "icon": "⌨️",
+  "permissions": [
+    "input.cursorUnlock"
+  ],
+  "program": {
+    "onInstall": [
+      {
+        "op": "toast",
+        "message": "BetterESC installed. Enable it for an instance to use Escape to unlock the cursor."
+      }
+    ]
+  }
+}

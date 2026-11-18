@@ -90,6 +90,53 @@ function clearFrame() {
   frameUrls.forEach(u => URL.revokeObjectURL(u));
   frameUrls = [];
 }
+async function instanceHasBetterESC(inst) {
+  try {
+    const records = await window.SClientCloud?.loadInstanceMods?.(inst.id);
+    if (!Array.isArray(records)) return false;
+    return records.some(record => {
+      const manifest = record?.manifest;
+      const versions = Array.isArray(manifest?.gameVersions) ? manifest.gameVersions.map(String) : [String(manifest?.gameVersion || '')];
+      return record?.enabled === true
+        && manifest?.permissions?.includes('input.cursorUnlock')
+        && (!versions.filter(Boolean).length || versions.includes(String(inst.version)));
+    });
+  } catch (error) {
+    console.warn('BetterESC could not read this instance mod profile:', error);
+    return false;
+  }
+}
+
+function installBetterESCOnFrame(frame) {
+  const attach = () => {
+    try {
+      const gameDocument = frame.contentDocument;
+      if (!gameDocument || gameDocument.__betterEscInstalled) return;
+      gameDocument.__betterEscInstalled = true;
+      // Keep track of the most recent pointer-lock state because Chromium may
+      // dispatch pointerlockchange before the Escape keydown reaches the page.
+      let pointerWasLocked = !!gameDocument.pointerLockElement;
+      gameDocument.addEventListener('pointerlockchange', () => {
+        if (gameDocument.pointerLockElement) pointerWasLocked = true;
+      }, true);
+      gameDocument.addEventListener('keydown', event => {
+        if (event.code !== 'Escape' || (!gameDocument.pointerLockElement && !pointerWasLocked)) return;
+        pointerWasLocked = false;
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        try { gameDocument.exitPointerLock?.(); } catch (error) { console.debug('BetterESC cursor unlock:', error); }
+      }, true);
+    } catch (error) {
+      console.warn('BetterESC could not attach to the Aquavoid game frame:', error);
+    }
+  };
+  frame.addEventListener('load', attach);
+  // Cached same-origin pages may already be complete by the time the listener
+  // is registered; attach in that case too.
+  if (frame.contentDocument?.readyState === 'complete') attach();
+}
+
 async function mountInstance(inst) {
   clearFrame();
 
@@ -100,12 +147,12 @@ async function mountInstance(inst) {
   // [DEFAULT] Aquavoid Firebase Auth session created by the launcher.
   const gameUrl = new URL(versionFolder(inst.version) + 'index.html', document.baseURI);
   gameUrl.searchParams.set('sclientInstance', inst.id);
+  const betterESCEnabled = await instanceHasBetterESC(inst);
 
   const frame = document.createElement('iframe');
   frame.title = inst.name;
   frame.allow = 'fullscreen; autoplay; clipboard-write';
-  frame.allowFullscreen = true;
-  frame.setAttribute('allowfullscreen', '');
+  if (betterESCEnabled) installBetterESCOnFrame(frame);
   frame.src = gameUrl.href;
   const wrap = $('instanceFrameWrap');
   wrap.appendChild(frame);

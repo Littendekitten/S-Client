@@ -17,6 +17,24 @@
         "1.0",
         "1.01"
       ]
+    },
+    {
+      "id": "betteresc",
+      "file": "betteresc.sclient",
+      "name": "BetterESC",
+      "author": "KitaCat",
+      "version": "1.0.0",
+      "gameVersion": "1.0 + 1.01",
+      "icon": "⌨️",
+      "description": "Press Escape to release the mouse cursor without triggering the game pause action.",
+      "tags": [
+        "Controls",
+        "Quality of life"
+      ],
+      "gameVersions": [
+        "1.0",
+        "1.01"
+      ]
     }
   ]
 }

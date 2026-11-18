@@ -16,22 +16,34 @@
   <main id="authGate" class="auth-gate" aria-labelledby="authTitle">
     <section class="auth-card">
       <div class="auth-brand"><span class="brand-mark"><img src="images/logo.png" alt=""></span><span>S-CLIENT</span></div>
-      <div class="auth-kicker">STEP 1 OF 2 · S-CLIENT ACCOUNT</div>
-      <h1 id="authTitle">Your S-Client.<br><span>Your account.</span></h1>
-      <p class="auth-copy">Sign in with Google to open S-Client. Your S-Client profile, imported mods, shader packs and client-only preferences are saved to the S-Client Firestore project.</p>
-      <button id="googleSignInButton" class="google-signin-button" type="button">
-        <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.75 7.18l7.73 6C44.43 37.99 46.98 31.88 46.98 24.55z"/><path fill="#FBBC05" d="M10.53 28.59A14.4 14.4 0 0 1 9.75 24c0-1.59.27-3.13.76-4.59l-7.98-6.19A23.9 23.9 0 0 0 0 24c0 3.88.93 7.56 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.91-5.8l-7.73-6c-2.14 1.45-4.88 2.3-8.18 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
-        <span>Continue with Google</span>
-      </button>
-      <button id="authRetryButton" class="auth-retry-button" type="button" hidden>RETRY CLOUD CONNECTION</button>
-      <p id="authStatus" class="auth-status" role="status" aria-live="polite">Sign in is required before you can access the client.</p>
-      <div class="auth-foot"><span class="live-dot"></span> S-CLIENT PROFILE + MODS CLOUD <span class="auth-foot-divider">·</span> AQUAVOID GAME SAVE CLOUD</div>
+      <div id="sclientAuthStep">
+        <div class="auth-kicker">STEP 1 OF 2 · S-CLIENT ACCOUNT</div>
+        <h1 id="authTitle">Your S-Client.<br><span>Your account.</span></h1>
+        <p class="auth-copy">Sign in with Google to continue. Your S-Client profile, imported mods, shader packs and client-only preferences are saved to the S-Client Firestore project.</p>
+        <button id="googleSignInButton" class="google-signin-button" type="button">
+          <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.75 7.18l7.73 6C44.43 37.99 46.98 31.88 46.98 24.55z"/><path fill="#FBBC05" d="M10.53 28.59A14.4 14.4 0 0 1 9.75 24c0-1.59.27-3.13.76-4.59l-7.98-6.19A23.9 23.9 0 0 0 0 24c0 3.88.93 7.56 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.91-5.8l-7.73-6c-2.14 1.45-4.88 2.3-8.18 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+          <span>Continue with Google · S-Client</span>
+        </button>
+        <button id="authRetryButton" class="auth-retry-button" type="button" hidden>RETRY CLOUD CONNECTION</button>
+        <p id="authStatus" class="auth-status" role="status" aria-live="polite">Sign in is required before you can access the client.</p>
+      </div>
+      <section id="aquavoidAuthGate" class="aquavoid-auth-gate startup-aquavoid-gate" aria-labelledby="aquavoidAuthTitle" hidden>
+        <div class="aquavoid-auth-card">
+          <div class="auth-kicker">STEP 2 OF 2 · AQUAVOID ACCOUNT</div>
+          <h2 id="aquavoidAuthTitle">Connect your Aquavoid account</h2>
+          <p>S-Client is signed in. Now connect the separate Google account you use for Aquavoid. Both accounts will stay signed in on this browser, so you won't be asked again for every instance launch.</p>
+          <button id="aquavoidSignInButton" class="google-signin-button aquavoid-signin-button" type="button"><span>Continue with Google · Aquavoid</span></button>
+          <p id="aquavoidAuthStatus" class="auth-status" role="status" aria-live="polite">Complete this second sign-in to open the launcher.</p>
+          <button id="aquavoidRetryButton" class="auth-retry-button" type="button" hidden>RETRY AQUAVOID CONNECTION</button>
+        </div>
+      </section>
+      <div class="auth-foot"><span class="live-dot"></span> TWO SEPARATE ACCOUNTS · BOTH REQUIRED TO ENTER</div>
     </section>
   </main>
   <div class="client-shell" style="display:none">
     <header class="topbar">
       <a class="brand" href="#play" aria-label="S-Client home"><span class="brand-mark"><img src="images/logo.png" alt=""></span><span>S-CLIENT</span></a>
-      <div class="topbar-center"><span class="live-dot"></span><span>S-CLIENT CLOUD</span><span class="version">v1.16.0</span></div>
+      <div class="topbar-center"><span class="live-dot"></span><span>S-CLIENT CLOUD</span><span class="version">v1.17.0</span></div>
       <div class="topbar-right">
         <span id="cloudStatus" class="cloud-status" aria-live="polite"><span class="live-dot"></span> CLOUD SAVED</span>
         <div class="profile-chip" title="Signed in with Google"><img id="profilePhoto" class="profile-photo" alt="" hidden><span id="profileAvatar" class="profile-avatar">S</span><span id="profileName">PLAYER</span></div>
@@ -90,16 +102,6 @@
           </div>
           <div id="instanceFrameWrap" class="instance-frame-wrap"></div>
 
-          <section id="aquavoidAuthGate" class="aquavoid-auth-gate" aria-labelledby="aquavoidAuthTitle">
-            <div class="aquavoid-auth-card">
-              <div class="auth-kicker">STEP 2 OF 2 · AQUAVOID ACCOUNT</div>
-              <h2 id="aquavoidAuthTitle">Connect your Aquavoid account</h2>
-              <p>This is a separate sign-in from your S-Client account. Connect the Google account you use for Aquavoid; it will be remembered for future launches on this browser.</p>
-              <button id="aquavoidSignInButton" class="google-signin-button aquavoid-signin-button" type="button"><span>Connect Google account · Aquavoid</span></button>
-              <p id="aquavoidAuthStatus" class="auth-status" role="status" aria-live="polite">First sign-in: S-Client is complete. Now connect your Aquavoid account to play.</p>
-              <button id="aquavoidRetryButton" class="auth-retry-button" type="button" hidden>RETRY AQUAVOID CONNECTION</button>
-            </div>
-          </section>
           <div id="aquavoidAccountBar" class="aquavoid-account-bar" hidden>
             <span class="live-dot"></span><span id="aquavoidAccountLabel">AQUAVOID ACCOUNT CONNECTED · CLOUD SAVE READY</span>
             <button id="aquavoidSignOutButton" class="quiet-button" type="button">SWITCH AQUAVOID ACCOUNT</button>

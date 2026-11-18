@@ -388,7 +388,6 @@ button:not(:disabled):active{transform:translateY(1px)}
 #view-play.no-instance > #instanceFrameWrap{display:none}
 #view-play.awaiting-aquavoid-auth > #noInstance{display:none!important}
 #view-play.awaiting-aquavoid-auth > #instanceFrameWrap{display:none!important}
-#view-play.awaiting-aquavoid-auth > #aquavoidAuthGate:not([hidden]){display:grid!important}
 .instance-frame-wrap{position:relative;width:100%;height:min(74vh,780px);min-height:480px;border:1px solid #274054;border-radius:13px;overflow:hidden;background:#07111d;box-shadow:0 24px 80px #0008}
 .instance-frame-wrap iframe{width:100%;height:100%;border:0;display:block;background:#07111d}
 .instance-frame-wrap:fullscreen{width:100vw;height:100vh;border:0;border-radius:0}
@@ -473,3 +472,12 @@ button:not(:disabled):active{transform:translateY(1px)}
 }
 .instance-frame-wrap:fullscreen{position:relative}
 .instance-frame-wrap:fullscreen .instance-fullscreen-button{top:16px;right:16px}
+
+/* S-Client v1.17 — startup requires both independent cloud accounts. */
+.startup-aquavoid-gate{min-height:0!important;margin-top:24px;padding:0!important;border:0!important;border-top:1px solid #29465b!important;border-radius:0!important;background:transparent!important;}
+.startup-aquavoid-gate .aquavoid-auth-card{width:100%;padding:22px 0 0;border:0;background:transparent;box-shadow:none;text-align:left;}
+.startup-aquavoid-gate .aquavoid-auth-card h2{margin:9px 0;color:#edf8ff;font-size:clamp(21px,4vw,27px);}
+.startup-aquavoid-gate .aquavoid-auth-card>p:not(.auth-status){max-width:none;margin:0 0 16px;color:#9ab3c6;font-size:11px;line-height:1.75;}
+.startup-aquavoid-gate .aquavoid-signin-button{max-width:none;margin:0;}
+.startup-aquavoid-gate .auth-status{margin:12px 0 0;}
+.startup-aquavoid-gate .auth-retry-button{margin-top:10px;}

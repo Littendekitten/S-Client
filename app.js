@@ -1,5 +1,5 @@
 import { initializeApp, getApps } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, browserSessionPersistence } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
+import { getAuth, GoogleAuthProvider, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, browserSessionPersistence } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, serverTimestamp, collection, query, where, orderBy, limit, getDocs } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 const firebaseConfig = {
@@ -35,6 +35,7 @@ const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 const authGate = document.getElementById('authGate');
+const sclientAuthStep = document.getElementById('sclientAuthStep');
 const authStatus = document.getElementById('authStatus');
 const signInButton = document.getElementById('googleSignInButton');
 const retryButton = document.getElementById('authRetryButton');
@@ -157,9 +158,14 @@ async function bootstrapSignedInUser(user) {
       await setDoc(modsRef, { installed: restoredMods, updatedAt: serverTimestamp() });
     }
     signedInUid = user.uid;
-    clientShell.style.display = 'flex';
-    authGate.hidden = true;
-    showAuthMessage('Signed in. Your cloud profile is ready.');
+    // S-Client account alone does not unlock the launcher. Keep the startup
+    // gate open and require the separate Aquavoid account as step two.
+    clientShell.style.display = 'none';
+    authGate.hidden = false;
+    sclientAuthStep.hidden = true;
+    authGate.setAttribute('aria-labelledby', 'aquavoidAuthTitle');
+    document.getElementById('aquavoidAuthGate').hidden = false;
+    showAuthMessage('S-Client connected. Complete the Aquavoid account sign-in to open the launcher.');
     updateCloudStatus();
     return true;
   } catch (error) {
@@ -215,31 +221,21 @@ try {
 
 signInButton.addEventListener('click', async () => {
   signInButton.disabled = true;
-  showAuthMessage('Opening Google sign-in…');
+  showAuthMessage('Redirecting to Google for S-Client sign-in…');
   try {
-    await signInWithPopup(firebaseAuth, googleProvider);
-    showAuthMessage('S-Client signed in. Connect your separate Aquavoid Google account from the Game tab to play.');
+    // Redirect flow avoids popup COOP/window.closed warnings and is reliable
+    // when S-Client is opened from a browser tab or installed web app.
+    await signInWithRedirect(firebaseAuth, googleProvider);
   } catch (error) {
-    console.error('Google popup sign-in failed:', error);
-    if (['auth/popup-blocked', 'auth/web-storage-unsupported', 'auth/operation-not-supported-in-this-environment', 'auth/cancelled-popup-request'].includes(error?.code)) {
-      showAuthMessage('Opening Google sign-in in this tab…');
-      try {
-        await signInWithRedirect(firebaseAuth, googleProvider);
-        return;
-      } catch (redirectError) {
-        console.error('Google redirect fallback failed:', redirectError);
-        error = redirectError;
-      }
-    }
+    console.error('Google redirect sign-in failed:', error);
     signInButton.disabled = false;
     const messages = {
-      'auth/popup-closed-by-user': 'Sign-in was cancelled. Click the Google button when you are ready.',
-      'auth/unauthorized-domain': 'Add this exact GitHub Pages hostname to Authorized domains in the S-Client Firebase project.',
+      'auth/unauthorized-domain': 'Add this exact S-Client website hostname to Authorized domains in the S-Client Firebase project.',
       'auth/operation-not-allowed': 'Enable the Google provider in S-Client Firebase Authentication.',
       'auth/invalid-api-key': 'The S-Client Firebase API key is invalid or restricted.',
       'auth/network-request-failed': 'Network error while contacting Google/Firebase. Check your connection and try again.'
     };
-    showAuthMessage(messages[error?.code] || `Google sign-in failed (${error?.code || 'unknown error'}).`, true);
+    showAuthMessage(messages[error?.code] || `Google sign-in failed (${error?.code || 'unknown error'}): ${error.message}`, true);
   }
 });
 retryButton.addEventListener('click', () => tryBootstrap(firebaseAuth.currentUser || pendingUser));
@@ -259,8 +255,11 @@ onAuthStateChanged(firebaseAuth, user => {
     }
     clientShell.style.display = 'none';
     authGate.hidden = false;
+    sclientAuthStep.hidden = false;
+    authGate.setAttribute('aria-labelledby', 'authTitle');
+    document.getElementById('aquavoidAuthGate').hidden = true;
     signInButton.disabled = false;
-    showAuthMessage('Sign in is required before you can access the client.');
+    showAuthMessage('Step 1 of 2: sign in to S-Client.');
     return;
   }
   tryBootstrap(user);
@@ -297,7 +296,20 @@ try {
 const aquavoidFirebaseApp = getApps().find(app => app.name === '[DEFAULT]')
   || initializeApp(aquavoidFirebaseConfig);
 const aquavoidAuth = getAuth(aquavoidFirebaseApp);
-const aquavoidFirestore = getFirestore(aquavoidFirebaseApp);
+// Restore Aquavoid's existing [DEFAULT] session on startup and migrate it to
+// local persistence when available. Fall back to tab/session persistence only
+// when the browser refuses durable storage.
+const aquavoidPersistenceReady = (async () => {
+  try {
+    await setPersistence(aquavoidAuth, browserLocalPersistence);
+    return 'local';
+  } catch (localError) {
+    console.warn('Aquavoid local auth persistence is unavailable; trying session persistence.', localError);
+    await setPersistence(aquavoidAuth, browserSessionPersistence);
+    return 'session';
+  }
+})();
+await aquavoidPersistenceReady;
 const aquavoidGoogleProvider = new GoogleAuthProvider();
 aquavoidGoogleProvider.setCustomParameters({ prompt: 'select_account' });
 const aquavoidGate = document.getElementById('aquavoidAuthGate');
@@ -410,34 +422,20 @@ window.AquavoidCloud = {
 
 aquavoidSignIn.addEventListener('click', async () => {
   aquavoidSignIn.disabled = true;
-  setAquavoidStatus('Opening Aquavoid Google sign-in…');
+  setAquavoidStatus('Redirecting to Google for Aquavoid sign-in…');
   try {
-    await setPersistence(aquavoidAuth, browserLocalPersistence);
-    await signInWithPopup(aquavoidAuth, aquavoidGoogleProvider);
+    await aquavoidPersistenceReady;
+    // Use the same-tab redirect flow for both accounts. This avoids the
+    // popup.ts COOP/window.closed warnings and persists across future launches.
+    await signInWithRedirect(aquavoidAuth, aquavoidGoogleProvider);
   } catch (error) {
-    const redirectCodes = [
-      'auth/popup-blocked',
-      'auth/web-storage-unsupported',
-      'auth/operation-not-supported-in-this-environment',
-      'auth/cancelled-popup-request'
-    ];
-    if (redirectCodes.includes(error?.code)) {
-      setAquavoidStatus('The sign-in popup is unavailable. Redirecting to Google…');
-      try {
-        await signInWithRedirect(aquavoidAuth, aquavoidGoogleProvider);
-        return;
-      } catch (redirectError) {
-        error = redirectError;
-      }
-    }
+    console.error('Aquavoid Google redirect sign-in failed:', error);
     const messages = {
-      'auth/unauthorized-domain': 'Add this exact GitHub Pages hostname to Authorized domains in the AQUAVOID Firebase project.',
+      'auth/unauthorized-domain': 'Add this exact S-Client website hostname to Authorized domains in the AQUAVOID Firebase project.',
       'auth/operation-not-allowed': 'Google sign-in is not enabled for the Aquavoid Firebase project.',
-      'auth/popup-closed-by-user': 'Sign-in was cancelled. You can try again.',
       'auth/network-request-failed': 'A network error interrupted Google sign-in. Check your connection and retry.'
     };
     setAquavoidStatus(messages[error?.code] || `Aquavoid sign-in failed (${error?.code || 'unknown error'}): ${error.message}`, true);
-  } finally {
     aquavoidSignIn.disabled = false;
   }
 });
@@ -460,8 +458,14 @@ async function onAquavoidUser(user) {
   if (!user) {
     window.AQUAVOID_BOOT = { authenticated: false, gameSave: null, uid: null };
     paintAquavoidAccount(false);
-    setAquavoidStatus('Sign in with your Aquavoid account to play and load your Aquavoid cloud save.');
+    setAquavoidStatus('Step 2 of 2: connect your Aquavoid Google account to open S-Client.');
     aquavoidRetry.hidden = true;
+    // Both identities are required to enter the launcher. If Aquavoid is
+    // disconnected later, return to step two without signing out of S-Client.
+    clientShell.style.display = 'none';
+    authGate.hidden = false;
+    sclientAuthStep.hidden = true;
+    authGate.setAttribute('aria-labelledby', 'aquavoidAuthTitle');
     window.dispatchEvent(new CustomEvent('sclient:aquavoid-disconnected'));
     return;
   }
@@ -485,11 +489,20 @@ async function onAquavoidUser(user) {
     }
     setAquavoidStatus('Aquavoid cloud save connected successfully.');
     aquavoidRetry.hidden = true;
+    // The launcher is unlocked only after both Firebase identities and the
+    // Aquavoid Firestore profile are ready. Local persistence makes this
+    // check automatic on later visits and instance launches.
+    authGate.hidden = true;
+    clientShell.style.display = 'flex';
     window.dispatchEvent(new CustomEvent('sclient:aquavoid-ready', { detail: { uid: user.uid } }));
   } catch (error) {
     aquavoidCloudReady = false;
     window.AQUAVOID_BOOT = { authenticated: false, gameSave: null, uid: null };
     paintAquavoidAccount(false);
+    clientShell.style.display = 'none';
+    authGate.hidden = false;
+    sclientAuthStep.hidden = true;
+    authGate.setAttribute('aria-labelledby', 'aquavoidAuthTitle');
     setAquavoidStatus(error?.code === 'permission-denied'
       ? 'Aquavoid Firestore denied access. Publish the Aquavoid players/{uid} owner-only rules.'
       : `Could not load Aquavoid Firestore (${error?.code || 'connection error'}): ${error.message}`, true);
@@ -501,7 +514,12 @@ onAuthStateChanged(aquavoidAuth, user => {
 });
 getRedirectResult(aquavoidAuth).catch(error => {
   console.warn('Aquavoid Google redirect sign-in failed:', error);
-  setAquavoidStatus(`Aquavoid Google sign-in failed (${error?.code || 'unknown error'}). Use the sign-in button to retry.`, true);
+  clientShell.style.display = 'none';
+  authGate.hidden = false;
+  sclientAuthStep.hidden = true;
+  authGate.setAttribute('aria-labelledby', 'aquavoidAuthTitle');
+  aquavoidGate.hidden = false;
+  setAquavoidStatus(`Aquavoid Google sign-in failed (${error?.code || 'unknown error'}). Check the Aquavoid Firebase Authorized domains and try again.`, true);
 });
 
 (async () => {
@@ -3279,7 +3297,7 @@ function saveMods() {
 // SCL (S-Client Language) is a small, declarative, event-driven language with bounded conditional flow.
 // It is interpreted by this client; uploaded files never run JavaScript or eval().
 const SCL_VERSION = 1;
-const SCL_PERMISSIONS = new Set(['ui.toast','rendering.shaderPacks','eyesight.presets','aquavoid.features','aquavoid.actions','aquavoid.worlds','vehicles.shipSkins']);
+const SCL_PERMISSIONS = new Set(['ui.toast','rendering.shaderPacks','eyesight.presets','aquavoid.features','aquavoid.actions','aquavoid.worlds','vehicles.shipSkins','input.cursorUnlock']);
 const SCL_APIS = new Set(['ui.toast','rendering.selectShaderPack','rendering.resetShaderPack','aquavoid.action']);
 const SCL_EVENTS = ['onInstall','onEnable','onDisable','onSettingChange','onFeatureChange','onGameLoad','onGameUnload','onWorldEnter'];
 const SCL_CONTROL_TYPES = new Set(['text','button','toggle','select','slider','shaderPicker']);
@@ -4073,6 +4091,7 @@ function renderModPage(record) {
             'eyesight.presets':'Legacy shader preset permission',
             'rendering.shaderPacks':'Manage shader packs through the generic WebGL renderer',
             'vehicles.shipSkins':'Contribute data-driven vehicle skins',
+            'input.cursorUnlock':'Unlock the game cursor with Escape',
             'aquavoid.worlds':'Add game modes and tagged world content',
             'aquavoid.features':'Toggle built-in Aquavoid feature hooks',
             'aquavoid.actions':'Run existing allowlisted Aquavoid actions',
