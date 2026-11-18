@@ -1648,6 +1648,7 @@ const SHAPE_OF = ['sloop', 'galleon', 'cat', 'long', 'steam', 'ghost']
         for(const side of [-1,1])M(bx(.045,2.45,.06),glowMat,side*.99,2.16,-.18);
         flag.material.color.set(skin.flagColor);flag.position.set(.28,4.05,-.08);P.add(flag);
         const badgeCanvas=document.createElement('canvas');badgeCanvas.width=badgeCanvas.height=128;const ctx=badgeCanvas.getContext('2d');ctx.clearRect(0,0,128,128);ctx.fillStyle=skin.flagColor;ctx.beginPath();ctx.arc(64,64,56,0,Math.PI*2);ctx.fill();ctx.fillStyle='#ffffff';ctx.font='bold 66px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(skin.icon||'⛵',64,68);const badgeTexture=new THREE.CanvasTexture(badgeCanvas);badgeTexture.encoding=THREE.sRGBEncoding;const badge=new THREE.Mesh(new THREE.PlaneGeometry(.75,.75),new THREE.MeshBasicMaterial({map:badgeTexture,transparent:true,side:THREE.DoubleSide,depthWrite:false,toneMapped:false}));badge.position.set(0,2.18,-.31);badge.rotation.y=Math.PI;P.add(badge);
+        if(skin.logo){const logoImg=new Image();logoImg.onload=()=>{ctx.clearRect(0,0,128,128);ctx.fillStyle='#ffffff';ctx.beginPath();ctx.arc(64,64,58,0,Math.PI*2);ctx.fill();ctx.save();ctx.beginPath();ctx.arc(64,64,54,0,Math.PI*2);ctx.clip();ctx.drawImage(logoImg,6,6,116,116);ctx.restore();badgeTexture.needsUpdate=true;};logoImg.src=skin.logo;}
         const lantern=worldRuntimeMesh(P,new THREE.SphereGeometry(.1,10,8),glowMat,0,.55,1.22);
     };
 }
@@ -3436,7 +3437,7 @@ function normalizeVehicleSkin(raw,index,hasPermission){
     const id=String(raw.id||'');if(!isSafeSclKey(id,48))throw new Error(`vehicleSkins[${index}] has an invalid ID.`);
     const color=(value,fallback)=>/^#[0-9a-f]{6}$/i.test(String(value||''))?String(value):fallback;
     const style=['sloop','catamaran','trimaran','ironclad'].includes(String(raw.style||'sloop'))?String(raw.style||'sloop'):'sloop';
-    return {id,name:String(raw.name||id).slice(0,48),description:String(raw.description||'').slice(0,120),icon:String(raw.icon||'⛵').slice(0,4),style,hullColor:color(raw.hullColor,'#805232'),sailColor:color(raw.sailColor,'#f6efe0'),flagColor:color(raw.flagColor,'#ff6b8a'),glowColor:color(raw.glowColor,'#b6e2ee'),accentColor:color(raw.accentColor,'#d9b45a')};
+    return {id,name:String(raw.name||id).slice(0,48),description:String(raw.description||'').slice(0,120),icon:String(raw.icon||'⛵').slice(0,4),style,hullColor:color(raw.hullColor,'#805232'),sailColor:color(raw.sailColor,'#f6efe0'),flagColor:color(raw.flagColor,'#ff6b8a'),glowColor:color(raw.glowColor,'#b6e2ee'),accentColor:color(raw.accentColor,'#d9b45a'),logo:/^data:image\/png;base64,[A-Za-z0-9+\/=]{1,60000}$/.test(String(raw.logo||''))?String(raw.logo):''};
 }
 // Mods must declare which Aquavoid version(s) they were written for. Only versions listed here can be installed.
 const SUPPORTED_GAME_VERSIONS = ['1.0'];
@@ -4182,6 +4183,18 @@ async function applyModInstance(instanceId) {
     }
     renderModLibrary();
 }
+window.SClientMods = {
+    // Validates a downloaded mod (incl. the required gameVersion) and saves it into one instance's library.
+    async install(instanceId, raw) {
+        if (!instanceId) throw new Error('Choose an instance first.');
+        if (currentModInstanceId !== instanceId) await applyModInstance(instanceId);
+        const name = upsertManifest(raw);
+        const ok = await saveMods();
+        renderInstalledMods();
+        if (ok === false) throw new Error('Could not save to your account.');
+        return name;
+    }
+};
 window.addEventListener('sclient:mod-instance', event => applyModInstance(event.detail?.id || null));
 if (window.__sclientModInstance) applyModInstance(window.__sclientModInstance);
 $('modsLibraryButton')?.addEventListener('click', () => { activeModId = null; renderModLibrary(); });

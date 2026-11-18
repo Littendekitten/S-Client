@@ -1,4 +1,4 @@
-// S-Client launcher layer: Modrinth-style Library (instances) + Discover (download).
+// S-Client launcher layer: Modrinth-style Library (instances) + Mods download page.
 // Only Aquavoid 1.0 is supported for now, and a player can own at most 3 instances.
 const MAX_INSTANCES = 3;
 const SUPPORTED_VERSIONS = ['1.0'];
@@ -117,7 +117,7 @@ function renderModBar() {
     bar = document.createElement('div');
     bar.id = 'modInstanceBar';
     bar.className = 'mod-instance-bar';
-    $('view-mods').prepend(bar);
+    $('view-instancemods').prepend(bar);
     bar.addEventListener('change', e => { if (e.target.id === 'modInstanceSelect') setModInstance(e.target.value); });
   }
   if (!instances.length) {
@@ -127,6 +127,75 @@ function renderModBar() {
   }
   const imp = $('importModButton');
   if (imp) imp.disabled = !modInstanceId;
+}
+
+// ---- Mods tab: a download page. Mods are hosted in /mods/ and installed into one instance ----
+let modIndexPromise = null;
+const installedIdsByInstance = {};
+function loadModIndex() {
+  if (!modIndexPromise) modIndexPromise = fetch('mods/index.json', { cache: 'no-cache' }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }).then(d => Array.isArray(d.mods) ? d.mods : []);
+  return modIndexPromise;
+}
+async function refreshInstalledIds(instanceId) {
+  if (!instanceId || !window.SClientCloud) return [];
+  try {
+    const stored = await window.SClientCloud.loadInstanceMods(instanceId);
+    installedIdsByInstance[instanceId] = stored.map(m => m?.manifest?.id).filter(Boolean);
+  } catch (_) { installedIdsByInstance[instanceId] = installedIdsByInstance[instanceId] || []; }
+  return installedIdsByInstance[instanceId];
+}
+async function renderModCatalogue() {
+  const root = $('modCatalogue');
+  let mods;
+  try { mods = await loadModIndex(); }
+  catch (err) {
+    root.innerHTML = '<div class="empty-state"><div class="empty-icon">◇</div><h3>Could not load the mod list</h3><p>Check your connection and reload the page.</p></div>';
+    return;
+  }
+  $('modsTag').textContent = `${mods.length} MOD${mods.length === 1 ? '' : 'S'}`;
+  if (!instances.length) {
+    root.innerHTML = '<div class="empty-state"><div class="empty-icon">▦</div><h3>Create an instance first</h3><p>Mods are installed into an instance. Create one in your Library, then come back to download mods.</p><button class="outline-button" type="button" data-goto="library">OPEN LIBRARY</button></div>';
+    return;
+  }
+  const selected = root.dataset.instance && instances.some(i => i.id === root.dataset.instance) ? root.dataset.instance : (modInstanceId || instances[0].id);
+  root.dataset.instance = selected;
+  const have = installedIdsByInstance[selected] || await refreshInstalledIds(selected);
+  root.innerHTML = `
+    <div class="mod-instance-bar"><span class="mod-bar-label">INSTALL INTO</span>
+      <select id="catalogueInstance" class="mod-bar-select">${instances.map(i => `<option value="${esc(i.id)}" ${i.id === selected ? 'selected' : ''}>${esc(i.name)} · ${esc(i.version)}</option>`).join('')}</select>
+      <span class="mod-bar-hint">Manage installed mods from a Library card (MODS).</span></div>
+    <div class="catalogue-grid">${mods.map(m => {
+      const done = have.includes(m.id);
+      return `<article class="catalogue-card" data-file="${esc(m.file)}">
+        <div class="catalogue-icon">${esc(m.icon || '◇')}</div>
+        <div class="catalogue-body">
+          <h3>${esc(m.name)}</h3>
+          <p>${esc(m.description || '')}</p>
+          <div class="project-tags"><span>Aquavoid ${esc(m.gameVersion || '?')}</span><span>v${esc(m.version || '1.0.0')}</span>${(m.tags || []).map(t => `<span>${esc(t)}</span>`).join('')}</div>
+          <div class="instance-meta"><span>by ${esc(m.author || 'Unknown')}</span></div>
+        </div>
+        <div class="catalogue-action"><button class="primary-button" data-install="${esc(m.file)}" type="button" ${done ? 'disabled' : ''}>${done ? '✓ INSTALLED' : '⬇ DOWNLOAD'}</button></div>
+      </article>`;
+    }).join('')}</div>`;
+}
+async function installCatalogueMod(file, button) {
+  const instanceId = $('modCatalogue').dataset.instance;
+  if (!window.SClientMods) { toast('The client is still loading. Try again in a moment.'); return; }
+  button.disabled = true;
+  button.textContent = 'DOWNLOADING…';
+  try {
+    const res = await fetch('mods/' + file, { cache: 'no-cache' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const raw = await res.json();
+    setModInstance(instanceId, false);
+    const name = await window.SClientMods.install(instanceId, raw);
+    await refreshInstalledIds(instanceId);
+    toast(`${name} installed to ${instances.find(i => i.id === instanceId)?.name || 'your instance'}.`);
+  } catch (err) {
+    console.error(err);
+    toast(`Could not install: ${err.message}`);
+  }
+  renderModCatalogue();
 }
 
 function sanitizeInstance(raw) {
@@ -161,6 +230,12 @@ function fmtDate(ts) {
 }
 
 function goto(view) {
+  if (view === 'instancemods') {
+    // Per-instance mod manager has no sidebar entry: open it from a Library card.
+    document.querySelectorAll('.view').forEach(el => el.classList.toggle('view-active', el.id === 'view-instancemods'));
+    document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === 'library'));
+    return;
+  }
   document.querySelector(`.nav-item[data-view="${view}"]`)?.click();
 }
 
@@ -168,13 +243,9 @@ function renderCounts() {
   const n = instances.length;
   $('instanceCount').textContent = `${n}/${MAX_INSTANCES}`;
   $('libraryTag').textContent = `${n} / ${MAX_INSTANCES} INSTANCES`;
-  $('discoverTag').textContent = `${n} / ${MAX_INSTANCES} INSTANCES`;
-  $('slotMeter').innerHTML = Array.from({ length: MAX_INSTANCES }, (_, i) => `<span class="slot ${i < n ? 'used' : ''}"></span>`).join('') + `<em>${n} of ${MAX_INSTANCES} used</em>`;
   const full = n >= MAX_INSTANCES;
-  const btn = $('installVersionButton');
-  btn.disabled = installing;
-  btn.textContent = full ? 'LIMIT REACHED (3/3)' : '⬇ INSTALL';
-  btn.classList.toggle('is-full', full);
+  const btn = $('newInstanceButton');
+  btn.textContent = full ? 'LIMIT REACHED (3/3)' : '＋ NEW INSTANCE';
   btn.disabled = installing || full;
 }
 
@@ -197,13 +268,14 @@ function renderLibrary() {
       </div>
     </article>`);
   for (let i = instances.length; i < MAX_INSTANCES; i++) {
-    cards.push(`<article class="instance-card instance-empty"><div class="instance-icon ghost">＋</div><div class="instance-body"><h3>Empty slot</h3><div class="instance-meta"><span>Install Aquavoid from Discover</span></div></div><div class="instance-actions"><button class="outline-button" data-goto="discover" type="button">DISCOVER</button></div></article>`);
+    cards.push(`<article class="instance-card instance-empty"><div class="instance-icon ghost">＋</div><div class="instance-body"><h3>Empty slot</h3><div class="instance-meta"><span>Install Aquavoid 1.0</span></div></div><div class="instance-actions"><button class="outline-button" data-act="new" type="button">＋ INSTALL</button></div></article>`);
   }
   grid.innerHTML = cards.join('');
   renderCounts();
   if (modInstanceId && !instances.some(i => i.id === modInstanceId)) setModInstance(instances[0]?.id || null);
   else if (!modInstanceId && instances.length) setModInstance(activeInstanceId || instances[0].id);
   else renderModBar();
+  renderModCatalogue();
 }
 
 function updatePlayHeader() {
@@ -288,6 +360,7 @@ function renameInstance(id) {
 function openInstallPanel() {
   if (instances.length >= MAX_INSTANCES) { toast(`Instance limit reached (${MAX_INSTANCES}/${MAX_INSTANCES}). Delete one to install another.`); return; }
   $('installPanel').hidden = false;
+  $('installPanel').scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
   const input = $('instanceNameInput');
   const n = instances.length + 1;
   input.value = instances.length ? `Aquavoid 1.0 (${n})` : 'Aquavoid 1.0';
@@ -354,14 +427,22 @@ function wireEvents() {
   $('instanceGrid').addEventListener('click', e => {
     const btn = e.target.closest('button[data-act]');
     if (!btn) return;
+    if (btn.dataset.act === 'new') { openInstallPanel(); return; }
     const id = btn.closest('.instance-card')?.dataset.id;
     if (btn.dataset.act === 'play') launch(id);
     else if (btn.dataset.act === 'stop') { closeActiveInstance(); toast('Instance stopped.'); }
-    else if (btn.dataset.act === 'mods') { setModInstance(id); goto('mods'); }
+    else if (btn.dataset.act === 'mods') { setModInstance(id); goto('instancemods'); }
     else if (btn.dataset.act === 'rename') renameInstance(id);
     else if (btn.dataset.act === 'delete') deleteInstance(id);
   });
-  $('installVersionButton').addEventListener('click', openInstallPanel);
+  $('newInstanceButton').addEventListener('click', openInstallPanel);
+  $('modCatalogue').addEventListener('click', e => {
+    const b = e.target.closest('button[data-install]');
+    if (b) installCatalogueMod(b.dataset.install, b);
+  });
+  $('modCatalogue').addEventListener('change', e => {
+    if (e.target.id === 'catalogueInstance') { $('modCatalogue').dataset.instance = e.target.value; renderModCatalogue(); }
+  });
   $('cancelInstallButton').addEventListener('click', () => { if (!installing) $('installPanel').hidden = true; });
   $('confirmInstallButton').addEventListener('click', runInstall);
   $('instanceNameInput').addEventListener('keydown', e => { if (e.key === 'Enter') runInstall(); });

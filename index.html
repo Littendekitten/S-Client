@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#07101d">
+  <link rel="icon" type="image/png" href="images/favicon.png">
+  <link rel="apple-touch-icon" href="images/favicon.png">
   <title>Aquavoid — S-Client</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -13,7 +15,7 @@
 <body>
   <main id="authGate" class="auth-gate" aria-labelledby="authTitle">
     <section class="auth-card">
-      <div class="auth-brand"><span class="brand-mark">S</span><span>S-CLIENT</span></div>
+      <div class="auth-brand"><span class="brand-mark"><img src="images/logo.png" alt=""></span><span>S-CLIENT</span></div>
       <div class="auth-kicker">PRIVATE PLAYER PROFILE</div>
       <h1 id="authTitle">Your S-Client.<br><span>Your account.</span></h1>
       <p class="auth-copy">Sign in with Google to open S-Client. Your S-Client profile, imported mods, shader packs and client-only preferences are saved to the S-Client Firestore project.</p>
@@ -28,7 +30,7 @@
   </main>
   <div class="client-shell" style="display:none">
     <header class="topbar">
-      <a class="brand" href="#play" aria-label="S-Client home"><span class="brand-mark">S</span><span>S-CLIENT</span></a>
+      <a class="brand" href="#play" aria-label="S-Client home"><span class="brand-mark"><img src="images/logo.png" alt=""></span><span>S-CLIENT</span></a>
       <div class="topbar-center"><span class="live-dot"></span><span>S-CLIENT CLOUD</span><span class="version">v1.16.0</span></div>
       <div class="topbar-right">
         <span id="cloudStatus" class="cloud-status" aria-live="polite"><span class="live-dot"></span> CLOUD SAVED</span>
@@ -41,7 +43,6 @@
       <aside class="sidebar" aria-label="Main navigation">
         <div class="side-label">CLIENT</div>
         <button class="nav-item active" data-view="library" type="button"><span class="nav-icon">▦</span><span>Library</span><span class="nav-count" id="instanceCount">0/3</span></button>
-        <button class="nav-item" data-view="discover" type="button"><span class="nav-icon">⌕</span><span>Discover</span></button>
         <button class="nav-item" data-view="play" type="button"><span class="nav-icon">▶</span><span>Game</span></button>
         <button class="nav-item" data-view="mods" type="button"><span class="nav-icon">◇</span><span>Mods</span><span class="nav-count" id="modCount">0</span></button>
         <button class="nav-item" data-view="settings" type="button" title="Settings"><span class="nav-icon">⚙</span><span>Settings</span></button>
@@ -51,56 +52,24 @@
       <main class="main-content">
         <section id="view-library" class="view view-active">
           <div class="page-heading">
-            <div><div class="eyebrow">YOUR INSTANCES</div><h1>Library</h1><p>Each instance is its own installed copy of Aquavoid. You can keep up to 3.</p></div>
-            <div class="heading-tag"><span class="live-dot"></span> <span id="libraryTag">0 / 3 INSTANCES</span></div>
+            <div><div class="eyebrow">YOUR INSTANCES</div><h1>Library</h1><p>Each instance is its own installed copy of Aquavoid with its own mods. You can keep up to 3.</p></div>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><button id="newInstanceButton" class="import-button" type="button">＋ NEW INSTANCE</button><div class="heading-tag"><span class="live-dot"></span> <span id="libraryTag">0 / 3 INSTANCES</span></div></div>
           </div>
           <div id="instanceGrid" class="instance-grid"></div>
-        </section>
 
-        <section id="view-discover" class="view">
-          <div class="page-heading">
-            <div><div class="eyebrow">DISCOVER</div><h1>Find a game</h1><p>Download a game and it appears in your Library as an instance.</p></div>
-            <div class="heading-tag"><span class="live-dot"></span> <span id="discoverTag">0 / 3 INSTANCES</span></div>
-          </div>
-          <div class="discover-layout">
-            <div class="discover-main">
-              <article class="project-card">
-                <div class="project-icon">A</div>
-                <div class="project-info">
-                  <div class="project-title-row"><h2>Aquavoid</h2><span class="optional-chip">GAME</span></div>
-                  <p>The ground is a living wave. Ride each crest to be thrown skyward, catch floating crystals and build multipliers. Levels, Endless mode, ships, weapons and a leaderboard.</p>
-                  <div class="project-tags"><span>Arcade</span><span>3D</span><span>Singleplayer</span><span>Mod support</span></div>
-                </div>
-              </article>
-
-              <div class="section-heading"><div><h2>Versions</h2><p>Only version 1.0 is supported right now. More versions are coming later.</p></div><span class="count-chip">1 AVAILABLE</span></div>
-              <div class="version-table">
-                <div class="version-row version-head"><span>VERSION</span><span>CHANNEL</span><span>LOADER</span><span></span></div>
-                <div class="version-row">
-                  <span class="version-name"><strong>Aquavoid 1.0</strong><small>Original release</small></span>
-                  <span><i class="chan-pill">RELEASE</i></span>
-                  <span class="muted-mono">S-Client</span>
-                  <span class="version-action"><button id="installVersionButton" class="primary-button install-btn" type="button">⬇ INSTALL</button></span>
-                </div>
-              </div>
-
-              <div id="installPanel" class="install-panel" hidden>
-                <label class="settings-field-label" for="instanceNameInput">INSTANCE NAME</label>
-                <input id="instanceNameInput" class="settings-text-input" type="text" maxlength="24" placeholder="Aquavoid 1.0" autocomplete="off">
-                <div class="install-actions">
-                  <button id="confirmInstallButton" class="primary-button" type="button">DOWNLOAD</button>
-                  <button id="cancelInstallButton" class="soft-button" type="button">CANCEL</button>
-                </div>
-                <div id="installProgress" class="install-progress" hidden>
-                  <div class="install-progress-label"><span id="installStep">Preparing…</span><span id="installPercent">0%</span></div>
-                  <div class="mod-loading-track"><span id="installBar"></span></div>
-                </div>
-              </div>
+          <div id="installPanel" class="install-panel" hidden>
+            <div class="project-title-row"><h2 class="install-title">Install Aquavoid 1.0</h2><span class="chan-pill">RELEASE</span></div>
+            <p class="install-note">Version 1.0 is the only version supported right now. More versions are coming later.</p>
+            <label class="settings-field-label" for="instanceNameInput">INSTANCE NAME</label>
+            <input id="instanceNameInput" class="settings-text-input" type="text" maxlength="24" placeholder="Aquavoid 1.0" autocomplete="off">
+            <div class="install-actions">
+              <button id="confirmInstallButton" class="primary-button" type="button">⬇ DOWNLOAD</button>
+              <button id="cancelInstallButton" class="soft-button" type="button">CANCEL</button>
             </div>
-            <aside class="mods-aside">
-              <div class="aside-card"><div class="aside-icon">▦</div><h3>Instance limit</h3><p>You can have at most <strong>3 instances</strong> at the same time. Delete one in your Library to free up a slot.</p><div class="aside-rule"></div><div class="slot-meter" id="slotMeter"></div></div>
-              <div class="aside-card"><div class="aside-icon">◇</div><h3>Mods</h3><p>Mods you import in the Mods tab apply when you launch an instance.</p></div>
-            </aside>
+            <div id="installProgress" class="install-progress" hidden>
+              <div class="install-progress-label"><span id="installStep">Preparing…</span><span id="installPercent">0%</span></div>
+              <div class="mod-loading-track"><span id="installBar"></span></div>
+            </div>
           </div>
         </section>
 
@@ -111,7 +80,7 @@
           </div>
           <div id="noInstance" class="empty-state no-instance-card">
             <div class="empty-icon">▶</div><h3>No instance is running</h3>
-            <p>Launch one of your Aquavoid instances from the Library. If you have none yet, find Aquavoid in Discover and install it.</p>
+            <p>Launch one of your Aquavoid instances from the Library. If you have none yet, create one with New instance.</p>
             <button class="outline-button" type="button" data-goto="library">OPEN LIBRARY</button>
           </div>
           <div id="instanceFrameWrap" class="instance-frame-wrap"></div>
@@ -233,10 +202,18 @@
         </section>
 
         <section id="view-mods" class="view">
+          <div class="page-heading">
+            <div><div class="eyebrow">DOWNLOAD</div><h1>Mods</h1><p>Download mods into one of your instances. Each instance keeps its own mods.</p></div>
+            <div class="heading-tag"><span class="live-dot"></span> <span id="modsTag">0 MODS</span></div>
+          </div>
+          <div id="modCatalogue" class="mod-catalogue"></div>
+        </section>
+
+        <section id="view-instancemods" class="view">
           <div id="modsLibraryView">
             <div class="page-heading mods-heading">
-              <div><div class="eyebrow">YOUR PRIVATE LIBRARY</div><h1>Mod manager</h1><p>Nothing is preinstalled. Only mods you explicitly import appear here; there is no public catalogue or anonymous downloads.</p></div>
-              <button id="importModButton" class="import-button" type="button">＋ IMPORT MODS / ZIP</button>
+              <div><div class="eyebrow">INSTANCE MODS</div><h1>Instance mods</h1><p>Enable, configure and remove the mods installed in this instance. Get more from the Mods tab.</p></div>
+              <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="soft-button" type="button" data-goto="library">← LIBRARY</button><button id="importModButton" class="import-button" type="button">＋ IMPORT MODS / ZIP</button></div>
             </div>
             <div class="mods-layout">
               <div class="mods-main">
