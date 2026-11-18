@@ -192,6 +192,8 @@ button:not(:disabled):active{transform:translateY(1px)}
 .aquavoid-signin-button{max-width:360px;margin:0 auto;background:linear-gradient(110deg,#e9f8ff,#cceef3);}
 .aquavoid-account-bar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:10px 13px;margin:0 0 12px;border:1px solid #275747;border-radius:8px;background:#0d2925;color:#a6e8cf;font:9px 'DM Mono',monospace;letter-spacing:.7px}
 .aquavoid-account-bar .quiet-button{margin-left:auto}
+.aquavoid-account-bar #aquavoidSignOutButton{margin-left:0}
+.aquavoid-account-bar #aquavoidCloudRetryButton{border-color:#a77a39;color:#f4d49a}
 .game-window[hidden]{display:none!important}
 @media(max-width:620px){.aquavoid-auth-gate{min-height:380px;padding:12px}.aquavoid-account-bar{font-size:8px}.aquavoid-account-bar .quiet-button{margin-left:0}}
 
