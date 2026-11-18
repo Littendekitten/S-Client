@@ -1,0 +1,18 @@
+{
+  "mods": [
+    {
+      "id": "kitacat-boat",
+      "file": "kitacat-boat.sclient",
+      "name": "KitaCat Boat",
+      "author": "KitaCat",
+      "version": "1.0.0",
+      "gameVersion": "1.0",
+      "icon": "🐱",
+      "description": "A purple, spacey ship with the KitaCat logo on its sail.",
+      "tags": [
+        "Ship skin",
+        "Cosmetic"
+      ]
+    }
+  ]
+}
