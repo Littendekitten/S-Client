@@ -11,6 +11,7 @@ const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 let instances = [];
 let activeInstanceId = null;
 let installing = false;
+let modInstanceId = null; // instance whose mods the Mods tab is showing
 let lastTick = Date.now();
 let unsavedSeconds = 0;
 
@@ -83,15 +84,49 @@ async function mountInstance(inst) {
   const cssUrl = URL.createObjectURL(new Blob([files['style.css']], { type: 'text/css' }));
   const jsUrl = URL.createObjectURL(new Blob([files['app.js']], { type: 'text/javascript' }));
   frameUrls.push(cssUrl, jsUrl);
-  const html = files['index.html']
+  let html = files['index.html']
     .replace(/<link[^>]*href=["']style\.css["'][^>]*>/i, `<link rel="stylesheet" href="${cssUrl}">`)
     .replace(/<script[^>]*src=["']app\.js["'][^>]*>\s*<\/script>/i, `<script type="module" src="${jsUrl}"><\/script>`);
+  // Hand this instance's enabled mods to the game page before its script runs.
+  let enabledMods = [];
+  try {
+    const stored = await window.SClientCloud.loadInstanceMods(inst.id);
+    enabledMods = stored.filter(m => m && m.enabled && m.manifest).map(m => ({ manifest: m.manifest, featureStates: m.featureStates || {}, settings: m.settings || {} }));
+  } catch (err) { console.warn('Could not load instance mods:', err); }
+  const bootData = JSON.stringify({ id: inst.id, name: inst.name, version: inst.version, mods: enabledMods }).replace(/</g, '\\u003c');
+  html = html.replace(/<script[^>]*src=["']blob:/i, m => `<script>window.SCLIENT_INSTANCE=${bootData};<\/script>${m}`);
   const frame = document.createElement('iframe');
   frame.title = inst.name;
   frame.allow = 'fullscreen; autoplay; clipboard-write';
   frame.setAttribute('allowfullscreen', '');
   frame.srcdoc = html;
   $('instanceFrameWrap').appendChild(frame);
+}
+
+
+// ---- Per-instance mods: pick which instance the Mods tab manages ----
+function setModInstance(id, notify = true) {
+  modInstanceId = id && instances.some(i => i.id === id) ? id : null;
+  window.__sclientModInstance = modInstanceId;
+  if (notify) window.dispatchEvent(new CustomEvent('sclient:mod-instance', { detail: { id: modInstanceId } }));
+  renderModBar();
+}
+function renderModBar() {
+  let bar = $('modInstanceBar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'modInstanceBar';
+    bar.className = 'mod-instance-bar';
+    $('view-mods').prepend(bar);
+    bar.addEventListener('change', e => { if (e.target.id === 'modInstanceSelect') setModInstance(e.target.value); });
+  }
+  if (!instances.length) {
+    bar.innerHTML = '<span class="mod-bar-label">MODS ARE PER INSTANCE</span><span class="mod-bar-hint">Install Aquavoid from Discover first, then add mods to that instance.</span>';
+  } else {
+    bar.innerHTML = `<span class="mod-bar-label">MODS FOR INSTANCE</span><select id="modInstanceSelect" class="mod-bar-select">${instances.map(i => `<option value="${esc(i.id)}" ${i.id === modInstanceId ? 'selected' : ''}>${esc(i.name)} · ${esc(i.version)}</option>`).join('')}</select><span class="mod-bar-hint">Each instance has its own mod library, enabled mods and settings.</span>`;
+  }
+  const imp = $('importModButton');
+  if (imp) imp.disabled = !modInstanceId;
 }
 
 function sanitizeInstance(raw) {
@@ -156,6 +191,7 @@ function renderLibrary() {
       <div class="instance-actions">
         <button class="primary-button" data-act="play" type="button">${inst.id === activeInstanceId ? '▶ RESUME' : '▶ PLAY'}</button>
         ${inst.id === activeInstanceId ? '<button class="soft-button" data-act="stop" type="button">■ STOP</button>' : ''}
+        <button class="soft-button" data-act="mods" type="button">MODS</button>
         <button class="soft-button" data-act="rename" type="button">RENAME</button>
         <button class="soft-button danger" data-act="delete" type="button">DELETE</button>
       </div>
@@ -165,6 +201,9 @@ function renderLibrary() {
   }
   grid.innerHTML = cards.join('');
   renderCounts();
+  if (modInstanceId && !instances.some(i => i.id === modInstanceId)) setModInstance(instances[0]?.id || null);
+  else if (!modInstanceId && instances.length) setModInstance(activeInstanceId || instances[0].id);
+  else renderModBar();
 }
 
 function updatePlayHeader() {
@@ -227,6 +266,7 @@ function deleteInstance(id) {
   if (id === activeInstanceId) closeActiveInstance();
   instances = instances.filter(i => i.id !== id);
   deleteFiles(id).catch(() => {});
+  window.SClientCloud?.deleteInstanceMods?.(id)?.catch?.(() => {});
   persist();
   renderLibrary();
   toast(`Deleted ${inst.name}.`);
@@ -317,6 +357,7 @@ function wireEvents() {
     const id = btn.closest('.instance-card')?.dataset.id;
     if (btn.dataset.act === 'play') launch(id);
     else if (btn.dataset.act === 'stop') { closeActiveInstance(); toast('Instance stopped.'); }
+    else if (btn.dataset.act === 'mods') { setModInstance(id); goto('mods'); }
     else if (btn.dataset.act === 'rename') renameInstance(id);
     else if (btn.dataset.act === 'delete') deleteInstance(id);
   });

@@ -1,6 +1,6 @@
 import { initializeApp, getApps } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, browserSessionPersistence } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
-import { getFirestore, doc, getDoc, setDoc, serverTimestamp, collection, query, where, orderBy, limit, getDocs } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
+import { getFirestore, doc, getDoc, setDoc, deleteDoc, serverTimestamp, collection, query, where, orderBy, limit, getDocs } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyB5WMIaadItMKOygz-F47aYSmKoltPluF4',
@@ -124,7 +124,18 @@ async function bootstrapSignedInUser(user) {
       saveProfile: makeCloudWriter(profileRef, 'profile'),
       saveClientPrefs: makeCloudWriter(clientPrefsRef, 'client preferences'),
       saveMods: makeCloudWriter(modsRef, 'mods'),
-      saveShaders: makeCloudWriter(shadersRef, 'shaders')
+      saveShaders: makeCloudWriter(shadersRef, 'shaders'),
+      // Mods are stored per instance: users/{uid}/client/mods-<instanceId>
+      loadInstanceMods: async instanceId => {
+        const snap = await getDoc(doc(firestore, 'users', user.uid, 'client', 'mods-' + instanceId));
+        const data = snap.exists() ? (snap.data() || {}) : {};
+        return Array.isArray(data.installed) ? data.installed : [];
+      },
+      saveInstanceMods: (() => {
+        const writers = {};
+        return (instanceId, data) => (writers[instanceId] ||= makeCloudWriter(doc(firestore, 'users', user.uid, 'client', 'mods-' + instanceId), 'instance mods'))(data);
+      })(),
+      deleteInstanceMods: instanceId => deleteDoc(doc(firestore, 'users', user.uid, 'client', 'mods-' + instanceId))
     };
     if (needsModsMigration) {
       await setDoc(modsRef, { installed: restoredMods, updatedAt: serverTimestamp() });
@@ -443,7 +454,8 @@ onAuthStateChanged(aquavoidAuth, user => { onAquavoidUser(user); });
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const toastRegion = $('toastRegion');
-let installedMods = Array.isArray(window.SCLIENT_BOOT?.mods) ? window.SCLIENT_BOOT.mods.filter(item => item && item.manifest && item.manifest.format === 'sclient-mod').map(item => ({...item, featureStates:item.featureStates || {}, settings:item.settings || {}, state:item.state || {}})) : [];
+let installedMods = []; // mods of the instance currently selected in the Mods tab
+let currentModInstanceId = null;
 let activeSessionMods = [];
 let modSessionActive = false;
 let modSessionLoadPromise = null;
@@ -3201,7 +3213,8 @@ function saveMods() {
         settings: { ...(record.settings || {}) },
         state: { ...(record.state || {}) }
     }));
-    return window.SClientCloud.saveMods({ installed: snapshot }).catch(error => {
+    if (!currentModInstanceId) return Promise.resolve(false);
+    return window.SClientCloud.saveInstanceMods(currentModInstanceId, { installed: snapshot }).catch(error => {
         console.error('S-Client mod sync failed:', error);
         toast('Could not sync your mods to Firestore. Check your connection.');
         return false;
@@ -4096,6 +4109,7 @@ async function unzipSupportedFiles(file) {
     return results;
 }
 async function importModFiles(files) {
+    if (!currentModInstanceId) { toast('Select or install an instance first. Mods are installed per instance.'); return; }
     let modCount = 0, shaderCount = 0, errors = [];
     for (const file of files) {
         try {
@@ -4138,7 +4152,7 @@ async function importShaderFiles(files) {
 }
 // Both import entry points must open the same picker. The empty-state button is
 // especially important for first-time users whose library has no installed mods.
-const openModImportPicker = () => $('modFileInput').click();
+const openModImportPicker = () => { if (!currentModInstanceId) { toast('Select or install an instance first. Mods are installed per instance.'); return; } $('modFileInput').click(); };
 $('importModButton')?.addEventListener('click', openModImportPicker);
 $('emptyImportButton')?.addEventListener('click', openModImportPicker);
 $('modFileInput').addEventListener('change', async event => {
@@ -4148,6 +4162,28 @@ $('modFileInput').addEventListener('change', async event => {
     event.target.value = '';
 });
 $('backToModLibrary').addEventListener('click', () => { activeModId = null; renderModLibrary(); });
+// Per-instance mods: the launcher tells us which instance's mod library to show.
+let modInstanceLoadToken = 0;
+async function applyModInstance(instanceId) {
+    const token = ++modInstanceLoadToken;
+    currentModInstanceId = instanceId || null;
+    activeModId = null;
+    installedMods.length = 0;
+    if (instanceId) {
+        try {
+            const stored = await window.SClientCloud.loadInstanceMods(instanceId);
+            if (token !== modInstanceLoadToken) return;
+            stored.filter(item => item && item.manifest && item.manifest.format === 'sclient-mod')
+                .forEach(item => installedMods.push({...item, featureStates:item.featureStates || {}, settings:item.settings || {}, state:item.state || {}}));
+        } catch (error) {
+            console.error('Could not load instance mods:', error);
+            toast('Could not load this instance\'s mods.');
+        }
+    }
+    renderModLibrary();
+}
+window.addEventListener('sclient:mod-instance', event => applyModInstance(event.detail?.id || null));
+if (window.__sclientModInstance) applyModInstance(window.__sclientModInstance);
 $('modsLibraryButton')?.addEventListener('click', () => { activeModId = null; renderModLibrary(); });
 $('modFileInput').setAttribute('multiple','');
 $('modFileInput').setAttribute('accept','.sclient,.shadersclient,.zip,application/zip,application/json,.json');
