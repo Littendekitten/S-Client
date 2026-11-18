@@ -1,5 +1,5 @@
 import { initializeApp, getApps } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
-import { getAuth, GoogleAuthProvider, signInWithRedirect, signInWithPopup, getRedirectResult, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, browserSessionPersistence } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
+import { getAuth, GoogleAuthProvider, signInWithRedirect, signInWithPopup, initializeAuth, browserPopupRedirectResolver, getRedirectResult, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, browserSessionPersistence } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, serverTimestamp, collection, query, where, orderBy, limit, getDocs } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 const firebaseConfig = {
@@ -324,7 +324,15 @@ try {
 }
 const aquavoidFirebaseApp = getApps().find(app => app.name === '[DEFAULT]')
   || initializeApp(aquavoidFirebaseConfig);
-const aquavoidAuth = getAuth(aquavoidFirebaseApp);
+// Pin Aquavoid auth to localStorage only. The game iframe uses the same key;
+// if the two sides used different storages, the game would migrate the user
+// out of localStorage on load and sign the launcher out the moment Play is clicked.
+let aquavoidAuth;
+try {
+  aquavoidAuth = initializeAuth(aquavoidFirebaseApp, { persistence: browserLocalPersistence, popupRedirectResolver: browserPopupRedirectResolver });
+} catch (error) {
+  aquavoidAuth = getAuth(aquavoidFirebaseApp);
+}
 // Use the Aquavoid project's Firestore instance for player saves and leaderboard
 // reads/writes. This must be initialized separately from S-Client's Firestore.
 const aquavoidFirestore = getFirestore(aquavoidFirebaseApp);
