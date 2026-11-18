@@ -296,6 +296,9 @@ try {
 const aquavoidFirebaseApp = getApps().find(app => app.name === '[DEFAULT]')
   || initializeApp(aquavoidFirebaseConfig);
 const aquavoidAuth = getAuth(aquavoidFirebaseApp);
+// Use the Aquavoid project's Firestore instance for player saves and leaderboard
+// reads/writes. This must be initialized separately from S-Client's Firestore.
+const aquavoidFirestore = getFirestore(aquavoidFirebaseApp);
 // Restore Aquavoid's existing [DEFAULT] session on startup and migrate it to
 // local persistence when available. Fall back to tab/session persistence only
 // when the browser refuses durable storage.
