@@ -12,23 +12,16 @@ const firebaseConfig = {
   measurementId: 'G-8LHG10LZYS'
 };
 
-// Keep S-Client's account in a named Firebase app. The default app name is
-// reserved for Aquavoid so same-origin game instances can reuse its persisted
-// Firebase Auth session without a second Google popup.
-// Best-effort migration: older S-Client builds stored this project's user as
-// the default Firebase app. Preserve that login when moving S-Client to a
-// named app so Aquavoid can own [DEFAULT] without signing users out.
-try {
-  const oldKey = `firebase:authUser:${firebaseConfig.apiKey}:[DEFAULT]`;
-  const newKey = `firebase:authUser:${firebaseConfig.apiKey}:sclient-account`;
-  if (!localStorage.getItem(newKey) && localStorage.getItem(oldKey)) {
-    localStorage.setItem(newKey, localStorage.getItem(oldKey));
-  }
-} catch (error) {
-  console.info('S-Client login migration was unavailable in this browser context.', error);
-}
-const firebaseApp = getApps().find(app => app.name === 'sclient-account')
-  || initializeApp(firebaseConfig, 'sclient-account');
+// S-Client uses its own versioned Firebase app namespace. Earlier builds
+// copied an auth-user record from [DEFAULT] into a named app. Firebase auth
+// records are implementation-owned state and must not be copied between app
+// namespaces: an obsolete refresh token can otherwise be retried on every
+// visit and produce securetoken.googleapis.com HTTP 400 responses.
+// Starting with a clean namespace forces one fresh S-Client sign-in while
+// leaving the separate Aquavoid [DEFAULT] session and all Firestore data alone.
+const SCLIENT_AUTH_APP_NAME = 'sclient-account-v2';
+const firebaseApp = getApps().find(app => app.name === SCLIENT_AUTH_APP_NAME)
+  || initializeApp(firebaseConfig, SCLIENT_AUTH_APP_NAME);
 const firebaseAuth = getAuth(firebaseApp);
 const firestore = getFirestore(firebaseApp);
 const googleProvider = new GoogleAuthProvider();
@@ -169,12 +162,32 @@ async function bootstrapSignedInUser(user) {
     updateCloudStatus();
     return true;
   } catch (error) {
-    console.error('S-Client Firestore bootstrap failed:', error);
+    console.error('S-Client account bootstrap failed:', error);
     signInButton.disabled = false;
+    const code = String(error?.code || '');
+    const isRejectedAuthSession = [
+      'auth/invalid-user-token',
+      'auth/user-token-expired',
+      'auth/invalid-refresh-token'
+    ].includes(code);
+
+    if (isRejectedAuthSession) {
+      // Firebase rejected the persisted refresh token. Clear this app's local
+      // Auth session so the next attempt starts a new Google OAuth sign-in.
+      // This does not delete the user's cloud profile or any game save.
+      try { await signOut(firebaseAuth); }
+      catch (signOutError) { console.warn('Could not clear the rejected S-Client Auth session:', signOutError); }
+      retryButton.hidden = true;
+      showAuthMessage(`Firebase rejected the saved S-Client login (${code}). Please sign in with Google again. Your cloud profile and saved data are not deleted.`, true);
+      return false;
+    }
+
     retryButton.hidden = false;
-    const detail = error?.code === 'permission-denied'
-      ? 'Firestore denied access. Publish the S-Client owner-only Firestore rules from the setup instructions.'
-      : `Could not load your Firestore data (${error?.code || 'connection error'}). Check Firestore is created and try again.`;
+    const detail = code === 'permission-denied'
+      ? 'Firestore denied access. Check the S-Client owner-only Firestore rules.'
+      : code === 'auth/invalid-api-key'
+        ? 'Firebase rejected the S-Client API key. Check the Web API key in the kitacat-s-client Firebase project.'
+        : `Could not load your S-Client account (${code || 'connection error'}): ${error?.message || 'Check your connection and Firebase configuration.'}`;
     showAuthMessage(detail, true);
     return false;
   }
@@ -210,13 +223,15 @@ async function tryBootstrap(user) {
 try {
   const redirectResult = await Promise.race([getRedirectResult(firebaseAuth), new Promise(resolve => setTimeout(resolve, 4000))]);
 } catch (error) {
-  console.error('Google redirect sign-in failed:', error);
+  console.error('S-Client Google redirect result failed:', error);
   const messages = {
-    'auth/unauthorized-domain': 'This GitHub Pages domain is not authorized in Firebase Authentication settings.',
+    'auth/unauthorized-domain': 'This website hostname is not authorized in the kitacat-s-client Firebase project.',
     'auth/operation-not-allowed': 'Google sign-in is not enabled in the S-Client Firebase project.',
-    'auth/invalid-api-key': 'The S-Client Firebase API key is invalid or restricted.'
+    'auth/invalid-api-key': 'The S-Client Firebase Web API key is invalid or restricted.',
+    'auth/invalid-user-token': 'Firebase rejected the previous S-Client refresh token. Start a fresh Google sign-in.',
+    'auth/user-token-expired': 'Your previous S-Client session expired. Start a fresh Google sign-in.'
   };
-  showAuthMessage(messages[error?.code] || `Google sign-in failed (${error?.code || 'unknown error'}).`, true);
+  showAuthMessage(messages[error?.code] || `Google sign-in failed (${error?.code || 'unknown error'}): ${error?.message || 'Check the Firebase error details.'}`, true);
 }
 
 signInButton.addEventListener('click', async () => {
