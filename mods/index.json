@@ -5,13 +5,17 @@
       "file": "kitacat-boat.sclient",
       "name": "KitaCat Boat",
       "author": "KitaCat",
-      "version": "1.0.0",
-      "gameVersion": "1.0",
+      "version": "1.0.1",
+      "gameVersion": "1.0 + 1.01",
       "icon": "🐱",
       "description": "A purple, spacey ship with the KitaCat logo on its sail.",
       "tags": [
         "Ship skin",
         "Cosmetic"
+      ],
+      "gameVersions": [
+        "1.0",
+        "1.01"
       ]
     }
   ]
