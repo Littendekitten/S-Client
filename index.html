@@ -58,8 +58,13 @@
           <div id="instanceGrid" class="instance-grid"></div>
 
           <div id="installPanel" class="install-panel" hidden>
-            <div class="project-title-row"><h2 class="install-title">Install Aquavoid 1.0</h2><span class="chan-pill">RELEASE</span></div>
-            <p class="install-note">Version 1.0 is the only version supported right now. More versions are coming later.</p>
+            <div class="project-title-row"><h2 class="install-title" id="installTitle">Install Aquavoid 1.0</h2><span class="chan-pill">RELEASE</span></div>
+            <p class="install-note" id="installNote">Choose Aquavoid 1.0 or 1.01. Each instance keeps its own game files and mods.</p>
+            <label class="settings-field-label" for="instanceVersionSelect">GAME VERSION</label>
+            <select id="instanceVersionSelect" class="settings-text-input" aria-label="Aquavoid game version">
+              <option value="1.0">Aquavoid 1.0</option>
+              <option value="1.01">Aquavoid 1.01</option>
+            </select>
             <label class="settings-field-label" for="instanceNameInput">INSTANCE NAME</label>
             <input id="instanceNameInput" class="settings-text-input" type="text" maxlength="24" placeholder="Aquavoid 1.0" autocomplete="off">
             <div class="install-actions">
@@ -89,8 +94,8 @@
             <div class="aquavoid-auth-card">
               <div class="auth-kicker">SECOND ACCOUNT REQUIRED</div>
               <h2 id="aquavoidAuthTitle">Connect your Aquavoid account</h2>
-              <p>Your S-Client account unlocks the client. Sign in with your Aquavoid account to play and load your Aquavoid cloud save.</p>
-              <button id="aquavoidSignInButton" class="google-signin-button aquavoid-signin-button" type="button"><span>Continue with Google · Aquavoid</span></button>
+              <p>S-Client can reuse the Google sign-in you just completed. On older sessions, connect your Aquavoid account once and it will be remembered for future launches.</p>
+              <button id="aquavoidSignInButton" class="google-signin-button aquavoid-signin-button" type="button"><span>Connect Google account · Aquavoid</span></button>
               <p id="aquavoidAuthStatus" class="auth-status" role="status" aria-live="polite">Waiting for Aquavoid sign-in.</p>
               <button id="aquavoidRetryButton" class="auth-retry-button" type="button" hidden>RETRY AQUAVOID CONNECTION</button>
             </div>

@@ -1,5 +1,5 @@
 import { initializeApp, getApps } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, browserSessionPersistence } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, signInWithCredential, getRedirectResult, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, browserSessionPersistence } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, serverTimestamp, collection, query, where, orderBy, limit, getDocs } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 const firebaseConfig = {
@@ -25,6 +25,9 @@ const retryButton = document.getElementById('authRetryButton');
 const clientShell = document.querySelector('.client-shell');
 const cloudStatusElement = document.getElementById('cloudStatus');
 let signedInUid = null;
+let pendingGoogleProviderCredential = null;
+let aquavoidAuthReady = false;
+let tryAutoAquavoidSignIn = null;
 let cloudPendingWrites = 0;
 let cloudWriteError = null;
 let cloudHasSaved = false;
@@ -186,7 +189,8 @@ async function tryBootstrap(user) {
 // Resolve a pending redirect sign-in on page return. Redirect is the fallback
 // for browsers/extensions that block Firebase's popup flow.
 try {
-  await Promise.race([getRedirectResult(firebaseAuth), new Promise(resolve => setTimeout(resolve, 4000))]);
+  const redirectResult = await Promise.race([getRedirectResult(firebaseAuth), new Promise(resolve => setTimeout(resolve, 4000))]);
+  if (redirectResult) pendingGoogleProviderCredential = GoogleAuthProvider.credentialFromResult(redirectResult);
 } catch (error) {
   console.error('Google redirect sign-in failed:', error);
   const messages = {
@@ -201,7 +205,11 @@ signInButton.addEventListener('click', async () => {
   signInButton.disabled = true;
   showAuthMessage('Opening Google sign-in…');
   try {
-    await signInWithPopup(firebaseAuth, googleProvider);
+    const result = await signInWithPopup(firebaseAuth, googleProvider);
+    // Reuse the Google provider credential for Aquavoid's separate Firebase
+    // project so the first sign-in can establish both sessions in one step.
+    pendingGoogleProviderCredential = GoogleAuthProvider.credentialFromResult(result);
+    tryAutoAquavoidSignIn?.();
     showAuthMessage('Google account verified. Loading your cloud data…');
   } catch (error) {
     console.error('Google popup sign-in failed:', error);
@@ -376,6 +384,31 @@ window.AquavoidCloud = {
   }
 };
 
+tryAutoAquavoidSignIn = async () => {
+  if (!aquavoidAuthReady || !pendingGoogleProviderCredential) return;
+  if (aquavoidAuth.currentUser) {
+    pendingGoogleProviderCredential = null;
+    return;
+  }
+  const credential = pendingGoogleProviderCredential;
+  pendingGoogleProviderCredential = null;
+  setAquavoidStatus('Reusing your Google sign-in to connect Aquavoid…');
+  try {
+    await setPersistence(aquavoidAuth, browserLocalPersistence);
+    await signInWithCredential(aquavoidAuth, credential);
+    // onAuthStateChanged loads the Aquavoid cloud save and makes the login
+    // available to the embedded 1.0 and 1.01 game builds.
+  } catch (error) {
+    console.warn('Automatic Aquavoid sign-in could not be completed:', error);
+    const hints = {
+      'auth/invalid-credential': 'Google did not accept the S-Client credential for Aquavoid. Use the Connect Google account button once to link Aquavoid directly.',
+      'auth/operation-not-allowed': 'Enable Google sign-in in the AQUAVOID Firebase Authentication settings.',
+      'auth/unauthorized-domain': 'Add this GitHub Pages hostname to Authorized domains in the AQUAVOID Firebase project.'
+    };
+    setAquavoidStatus(hints[error?.code] || `Automatic Aquavoid sign-in failed (${error?.code || 'connection error'}). Use the button below to connect once.`, true);
+  }
+};
+
 aquavoidSignIn.addEventListener('click', async () => {
   aquavoidSignIn.disabled = true;
   setAquavoidStatus('Opening Aquavoid Google sign-in…');
@@ -383,11 +416,26 @@ aquavoidSignIn.addEventListener('click', async () => {
     await setPersistence(aquavoidAuth, browserLocalPersistence);
     await signInWithPopup(aquavoidAuth, aquavoidGoogleProvider);
   } catch (error) {
+    const redirectCodes = [
+      'auth/popup-blocked',
+      'auth/web-storage-unsupported',
+      'auth/operation-not-supported-in-this-environment',
+      'auth/cancelled-popup-request'
+    ];
+    if (redirectCodes.includes(error?.code)) {
+      setAquavoidStatus('The sign-in popup is unavailable. Redirecting to Google…');
+      try {
+        await signInWithRedirect(aquavoidAuth, aquavoidGoogleProvider);
+        return;
+      } catch (redirectError) {
+        error = redirectError;
+      }
+    }
     const messages = {
-      'auth/unauthorized-domain': 'Add this GitHub Pages domain to Authorized domains in the AQUAVOID Firebase project too.',
+      'auth/unauthorized-domain': 'Add this exact GitHub Pages hostname to Authorized domains in the AQUAVOID Firebase project.',
       'auth/operation-not-allowed': 'Enable Google sign-in in the AQUAVOID Firebase Authentication settings.',
-      'auth/popup-blocked': 'Allow popups for this GitHub Pages domain and try again.',
-      'auth/popup-closed-by-user': 'Sign-in was cancelled. You can try again.'
+      'auth/popup-closed-by-user': 'Sign-in was cancelled. You can try again.',
+      'auth/network-request-failed': 'A network error interrupted Google sign-in. Check your connection and retry.'
     };
     setAquavoidStatus(messages[error?.code] || `Aquavoid sign-in failed (${error?.code || 'unknown error'}): ${error.message}`, true);
   } finally {
@@ -447,7 +495,16 @@ async function onAquavoidUser(user) {
     aquavoidRetry.hidden = false;
   }
 }
-onAuthStateChanged(aquavoidAuth, user => { onAquavoidUser(user); });
+onAuthStateChanged(aquavoidAuth, user => {
+  aquavoidAuthReady = true;
+  onAquavoidUser(user);
+  if (user) pendingGoogleProviderCredential = null;
+  else tryAutoAquavoidSignIn?.();
+});
+getRedirectResult(aquavoidAuth).catch(error => {
+  console.warn('Aquavoid Google redirect sign-in failed:', error);
+  setAquavoidStatus(`Aquavoid Google sign-in failed (${error?.code || 'unknown error'}). Use the sign-in button to retry.`, true);
+});
 
 (async () => {
 'use strict';
@@ -3440,7 +3497,7 @@ function normalizeVehicleSkin(raw,index,hasPermission){
     return {id,name:String(raw.name||id).slice(0,48),description:String(raw.description||'').slice(0,120),icon:String(raw.icon||'⛵').slice(0,4),style,hullColor:color(raw.hullColor,'#805232'),sailColor:color(raw.sailColor,'#f6efe0'),flagColor:color(raw.flagColor,'#ff6b8a'),glowColor:color(raw.glowColor,'#b6e2ee'),accentColor:color(raw.accentColor,'#d9b45a'),logo:/^data:image\/png;base64,[A-Za-z0-9+\/=]{1,60000}$/.test(String(raw.logo||''))?String(raw.logo):''};
 }
 // Mods must declare which Aquavoid version(s) they were written for. Only versions listed here can be installed.
-const SUPPORTED_GAME_VERSIONS = ['1.0'];
+const SUPPORTED_GAME_VERSIONS = ['1.0', '1.01'];
 function readGameVersions(raw) {
     const list = Array.isArray(raw.gameVersions) ? raw.gameVersions : (raw.gameVersion !== undefined && raw.gameVersion !== null && raw.gameVersion !== '' ? [raw.gameVersion] : []);
     return [...new Set(list.map(v => String(v).trim()).filter(Boolean))].slice(0,10);

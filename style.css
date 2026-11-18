@@ -386,7 +386,7 @@ button:not(:disabled):active{transform:translateY(1px)}
 #view-play > :not(.page-heading):not(#noInstance):not(#instanceFrameWrap){display:none!important}
 #view-play:not(.no-instance) > #noInstance{display:none}
 #view-play.no-instance > #instanceFrameWrap{display:none}
-.instance-frame-wrap{width:100%;height:min(74vh,780px);min-height:480px;border:1px solid #274054;border-radius:13px;overflow:hidden;background:#07111d;box-shadow:0 24px 80px #0008}
+.instance-frame-wrap{position:relative;width:100%;height:min(74vh,780px);min-height:480px;border:1px solid #274054;border-radius:13px;overflow:hidden;background:#07111d;box-shadow:0 24px 80px #0008}
 .instance-frame-wrap iframe{width:100%;height:100%;border:0;display:block;background:#07111d}
 .instance-frame-wrap:fullscreen{width:100vw;height:100vh;border:0;border-radius:0}
 .no-instance-card{margin-top:6px}
@@ -456,3 +456,17 @@ button:not(:disabled):active{transform:translateY(1px)}
 .catalogue-body p{margin:0 0 9px;color:#9ab2c5;font-size:11px;line-height:1.6}
 .catalogue-action .primary-button{padding:10px 16px;white-space:nowrap}
 @media(max-width:620px){.catalogue-card{flex-wrap:wrap}.catalogue-action{width:100%}}
+
+/* Instance fullscreen control (kept in the S-Client wrapper, not Aquavoid). */
+.instance-fullscreen-button{
+  position:absolute;top:12px;right:12px;z-index:8;width:42px;height:42px;
+  display:grid;place-items:center;border:1px solid rgba(210,235,245,.35);
+  border-radius:10px;background:rgba(5,17,28,.82);color:#eefaff;
+  font:700 22px/1 system-ui,sans-serif;cursor:pointer;backdrop-filter:blur(10px);
+  box-shadow:0 5px 20px rgba(0,0,0,.3);opacity:.84;transition:opacity .15s,background .15s;
+}
+.instance-fullscreen-button:hover,.instance-fullscreen-button:focus-visible{
+  opacity:1;background:rgba(16,51,68,.96);outline:2px solid rgba(123,220,228,.65);outline-offset:2px;
+}
+.instance-frame-wrap:fullscreen{position:relative}
+.instance-frame-wrap:fullscreen .instance-fullscreen-button{top:16px;right:16px}

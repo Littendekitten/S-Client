@@ -1,7 +1,7 @@
 // S-Client launcher layer: Modrinth-style Library (instances) + Mods download page.
-// Only Aquavoid 1.0 is supported for now, and a player can own at most 3 instances.
+// S-Client supports the released Aquavoid 1.0 and 1.01 builds.
 const MAX_INSTANCES = 3;
-const SUPPORTED_VERSIONS = ['1.0'];
+const SUPPORTED_VERSIONS = ['1.0', '1.01'];
 // Game versions are hosted in this repo's GitHub Pages root: /game-versions/Aquavoid-<version>/
 const VERSION_FILES = ['index.html', 'app.js', 'style.css'];
 const versionFolder = v => `game-versions/Aquavoid-${v}/`;
@@ -68,7 +68,12 @@ async function downloadVersion(version, id, onProgress) {
 // ---- Launching: build the game page from the downloaded files and run it in the Game tab ----
 let frameUrls = [];
 function clearFrame() {
-  $('instanceFrameWrap').innerHTML = '';
+  const wrap = $('instanceFrameWrap');
+  if (document.fullscreenElement === wrap) {
+    document.exitFullscreen?.().catch?.(() => {});
+    navigator.keyboard?.unlock?.();
+  }
+  wrap.innerHTML = '';
   frameUrls.forEach(u => URL.revokeObjectURL(u));
   frameUrls = [];
 }
@@ -91,7 +96,15 @@ async function mountInstance(inst) {
   let enabledMods = [];
   try {
     const stored = await window.SClientCloud.loadInstanceMods(inst.id);
-    enabledMods = stored.filter(m => m && m.enabled && m.manifest).map(m => ({ manifest: m.manifest, featureStates: m.featureStates || {}, settings: m.settings || {} }));
+    const supportsVersion = manifest => {
+      const versions = Array.isArray(manifest?.gameVersions) && manifest.gameVersions.length
+        ? manifest.gameVersions.map(String)
+        : (manifest?.gameVersion ? [String(manifest.gameVersion)] : []);
+      return !versions.length || versions.includes(String(inst.version));
+    };
+    enabledMods = stored
+      .filter(m => m && m.enabled && m.manifest && supportsVersion(m.manifest))
+      .map(m => ({ manifest: m.manifest, featureStates: m.featureStates || {}, settings: m.settings || {} }));
   } catch (err) { console.warn('Could not load instance mods:', err); }
   const bootData = JSON.stringify({ id: inst.id, name: inst.name, version: inst.version, mods: enabledMods }).replace(/</g, '\\u003c');
   html = html.replace(/<script[^>]*src=["']blob:/i, m => `<script>window.SCLIENT_INSTANCE=${bootData};<\/script>${m}`);
@@ -100,7 +113,42 @@ async function mountInstance(inst) {
   frame.allow = 'fullscreen; autoplay; clipboard-write';
   frame.setAttribute('allowfullscreen', '');
   frame.srcdoc = html;
-  $('instanceFrameWrap').appendChild(frame);
+  const wrap = $('instanceFrameWrap');
+  wrap.appendChild(frame);
+
+  // Fullscreen is controlled by the top-level S-Client document so the
+  // Keyboard Lock API can keep Escape from dismissing the game fullscreen.
+  const fullscreenButton = document.createElement('button');
+  fullscreenButton.type = 'button';
+  fullscreenButton.className = 'instance-fullscreen-button';
+  fullscreenButton.textContent = '⛶';
+  fullscreenButton.title = 'Enter fullscreen (Escape stays in the game)';
+  fullscreenButton.setAttribute('aria-label', 'Enter fullscreen');
+  fullscreenButton.addEventListener('click', async () => {
+    try {
+      if (document.fullscreenElement === wrap) {
+        await document.exitFullscreen();
+        navigator.keyboard?.unlock?.();
+      } else {
+        await wrap.requestFullscreen({ navigationUI: 'hide' });
+        if (typeof navigator.keyboard?.lock === 'function') {
+          try {
+            await navigator.keyboard.lock(['Escape']);
+          } catch (lockError) {
+            console.info('Keyboard Lock was refused; Escape may exit fullscreen.', lockError);
+            toast('Fullscreen started, but the browser refused to lock Escape.');
+          }
+        } else {
+          toast('Fullscreen started, but this browser cannot lock Escape. Use the on-screen exit button.');
+        }
+        frame.contentWindow?.focus?.();
+      }
+    } catch (error) {
+      console.error('Could not change game fullscreen:', error);
+      toast('Fullscreen was blocked by the browser. Try clicking again.');
+    }
+  });
+  wrap.appendChild(fullscreenButton);
 }
 
 
@@ -132,6 +180,7 @@ function renderModBar() {
 // ---- Mods tab: a download page. Mods are hosted in /mods/ and installed into one instance ----
 let modIndexPromise = null;
 const installedIdsByInstance = {};
+const installedVersionsByInstance = {};
 function loadModIndex() {
   if (!modIndexPromise) modIndexPromise = fetch('mods/index.json', { cache: 'no-cache' }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }).then(d => Array.isArray(d.mods) ? d.mods : []);
   return modIndexPromise;
@@ -141,7 +190,13 @@ async function refreshInstalledIds(instanceId) {
   try {
     const stored = await window.SClientCloud.loadInstanceMods(instanceId);
     installedIdsByInstance[instanceId] = stored.map(m => m?.manifest?.id).filter(Boolean);
-  } catch (_) { installedIdsByInstance[instanceId] = installedIdsByInstance[instanceId] || []; }
+    installedVersionsByInstance[instanceId] = Object.fromEntries(stored
+      .filter(m => m?.manifest?.id)
+      .map(m => [String(m.manifest.id), String(m.manifest.version || '')]));
+  } catch (_) {
+    installedIdsByInstance[instanceId] = installedIdsByInstance[instanceId] || [];
+    installedVersionsByInstance[instanceId] = installedVersionsByInstance[instanceId] || {};
+  }
   return installedIdsByInstance[instanceId];
 }
 async function renderModCatalogue() {
@@ -159,22 +214,30 @@ async function renderModCatalogue() {
   }
   const selected = root.dataset.instance && instances.some(i => i.id === root.dataset.instance) ? root.dataset.instance : (modInstanceId || instances[0].id);
   root.dataset.instance = selected;
-  const have = installedIdsByInstance[selected] || await refreshInstalledIds(selected);
+  // Refresh this instance's installed versions so catalogue updates remain visible
+  // even when a mod was imported from the private library in another tab.
+  const have = await refreshInstalledIds(selected);
   root.innerHTML = `
     <div class="mod-instance-bar"><span class="mod-bar-label">INSTALL INTO</span>
       <select id="catalogueInstance" class="mod-bar-select">${instances.map(i => `<option value="${esc(i.id)}" ${i.id === selected ? 'selected' : ''}>${esc(i.name)} · ${esc(i.version)}</option>`).join('')}</select>
       <span class="mod-bar-hint">Manage installed mods from a Library card (MODS).</span></div>
     <div class="catalogue-grid">${mods.map(m => {
       const done = have.includes(m.id);
+      const installedVersion = installedVersionsByInstance[selected]?.[m.id] || '';
+      const updateAvailable = done && !!installedVersion && installedVersion !== String(m.version || '');
+      const compatibleVersions = Array.isArray(m.gameVersions) && m.gameVersions.length ? m.gameVersions.map(String) : (m.gameVersion ? [String(m.gameVersion)] : []);
+      const compatible = !compatibleVersions.length || compatibleVersions.includes(String(instances.find(i => i.id === selected)?.version || ''));
+      const versionsLabel = compatibleVersions.length ? compatibleVersions.join(' / ') : String(m.gameVersion || '?');
+      const actionLabel = !compatible ? `NOT FOR ${instances.find(i => i.id === selected)?.version || 'THIS VERSION'}` : updateAvailable ? '↻ UPDATE' : done ? '✓ INSTALLED' : '⬇ DOWNLOAD';
       return `<article class="catalogue-card" data-file="${esc(m.file)}">
         <div class="catalogue-icon">${esc(m.icon || '◇')}</div>
         <div class="catalogue-body">
           <h3>${esc(m.name)}</h3>
           <p>${esc(m.description || '')}</p>
-          <div class="project-tags"><span>Aquavoid ${esc(m.gameVersion || '?')}</span><span>v${esc(m.version || '1.0.0')}</span>${(m.tags || []).map(t => `<span>${esc(t)}</span>`).join('')}</div>
-          <div class="instance-meta"><span>by ${esc(m.author || 'Unknown')}</span></div>
+          <div class="project-tags"><span>Aquavoid ${esc(versionsLabel)}</span><span>v${esc(m.version || '1.0.0')}</span>${(m.tags || []).map(t => `<span>${esc(t)}</span>`).join('')}</div>
+          <div class="instance-meta"><span>by ${esc(m.author || 'Unknown')}</span>${updateAvailable ? `<span>Installed v${esc(installedVersion)}</span>` : ''}</div>
         </div>
-        <div class="catalogue-action"><button class="primary-button" data-install="${esc(m.file)}" type="button" ${done ? 'disabled' : ''}>${done ? '✓ INSTALLED' : '⬇ DOWNLOAD'}</button></div>
+        <div class="catalogue-action"><button class="primary-button" data-install="${esc(m.file)}" type="button" ${!compatible || (done && !updateAvailable) ? 'disabled' : ''}>${actionLabel}</button></div>
       </article>`;
     }).join('')}</div>`;
 }
@@ -268,7 +331,7 @@ function renderLibrary() {
       </div>
     </article>`);
   for (let i = instances.length; i < MAX_INSTANCES; i++) {
-    cards.push(`<article class="instance-card instance-empty"><div class="instance-icon ghost">＋</div><div class="instance-body"><h3>Empty slot</h3><div class="instance-meta"><span>Install Aquavoid 1.0</span></div></div><div class="instance-actions"><button class="outline-button" data-act="new" type="button">＋ INSTALL</button></div></article>`);
+    cards.push(`<article class="instance-card instance-empty"><div class="instance-icon ghost">＋</div><div class="instance-body"><h3>Empty slot</h3><div class="instance-meta"><span>Install Aquavoid 1.0 or 1.01</span></div></div><div class="instance-actions"><button class="outline-button" data-act="new" type="button">＋ INSTALL</button></div></article>`);
   }
   grid.innerHTML = cards.join('');
   renderCounts();
@@ -363,7 +426,14 @@ function openInstallPanel() {
   $('installPanel').scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
   const input = $('instanceNameInput');
   const n = instances.length + 1;
-  input.value = instances.length ? `Aquavoid 1.0 (${n})` : 'Aquavoid 1.0';
+  const versionSelect = $('instanceVersionSelect');
+  if (versionSelect) versionSelect.value = '1.0';
+  const version = versionSelect?.value || '1.0';
+  const title = $('installTitle');
+  const note = $('installNote');
+  if (title) title.textContent = `Install Aquavoid ${version}`;
+  if (note) note.textContent = `Choose the game version for this instance. S-Client keeps each version's files separate.`;
+  input.value = instances.length ? `Aquavoid ${version} (${n})` : `Aquavoid ${version}`;
   input.focus();
   input.select();
 }
@@ -371,6 +441,8 @@ function openInstallPanel() {
 async function runInstall() {
   if (installing) return;
   if (instances.length >= MAX_INSTANCES) { toast(`Instance limit reached (${MAX_INSTANCES}/${MAX_INSTANCES}).`); return; }
+  const version = String($('instanceVersionSelect')?.value || '1.0');
+  if (!SUPPORTED_VERSIONS.includes(version)) { toast('Choose a supported Aquavoid version.'); return; }
   const name = $('instanceNameInput').value.replace(/\s+/g, ' ').trim().slice(0, 24);
   if (name.length < 2) { toast('Give your instance a name (2–24 characters).'); return; }
   installing = true;
@@ -387,8 +459,8 @@ async function runInstall() {
   };
   let failed = false;
   try {
-    setProgress('Fetching Aquavoid 1.0…', 5);
-    await downloadVersion('1.0', id, setProgress);
+    setProgress(`Fetching Aquavoid ${version}…`, 5);
+    await downloadVersion(version, id, setProgress);
     setProgress('Creating instance…', 100);
     await new Promise(r => setTimeout(r, 350));
   } catch (err) {
@@ -404,7 +476,7 @@ async function runInstall() {
     deleteFiles(id).catch(() => {});
     toast('Instance limit reached.');
   } else {
-    instances.push({ id, name, version: '1.0', createdAt: Date.now(), lastPlayed: 0, playSeconds: 0 });
+    instances.push({ id, name, version, createdAt: Date.now(), lastPlayed: 0, playSeconds: 0 });
     await persist();
     toast(`Installed ${name}. Find it in your Library.`);
     goto('library');
@@ -446,6 +518,39 @@ function wireEvents() {
   $('cancelInstallButton').addEventListener('click', () => { if (!installing) $('installPanel').hidden = true; });
   $('confirmInstallButton').addEventListener('click', runInstall);
   $('instanceNameInput').addEventListener('keydown', e => { if (e.key === 'Enter') runInstall(); });
+  $('instanceVersionSelect')?.addEventListener('change', () => {
+    const version = $('instanceVersionSelect').value;
+    const input = $('instanceNameInput');
+    const title = $('installTitle');
+    const note = $('installNote');
+    if (title) title.textContent = `Install Aquavoid ${version}`;
+    if (note) note.textContent = `Choose the game version for this instance. S-Client keeps each version's files separate.`;
+    const previousPrefix = /^Aquavoid 1\.0(?:1)?(?: \(\d+\))?$/;
+    if (!input.value.trim() || previousPrefix.test(input.value.trim())) {
+      input.value = instances.length ? `Aquavoid ${version} (${instances.length + 1})` : `Aquavoid ${version}`;
+    }
+    input.placeholder = `Aquavoid ${version}`;
+  });
+
+  // Keep the game fullscreen until the user presses the on-screen fullscreen
+  // control. Keyboard Lock captures Escape where the browser supports it.
+  document.addEventListener('fullscreenchange', () => {
+    const wrap = $('instanceFrameWrap');
+    const active = document.fullscreenElement === wrap;
+    const button = wrap?.querySelector('.instance-fullscreen-button');
+    if (button) {
+      button.textContent = active ? '×' : '⛶';
+      button.title = active ? 'Exit fullscreen' : 'Enter fullscreen (Escape stays in the game)';
+      button.setAttribute('aria-label', active ? 'Exit fullscreen' : 'Enter fullscreen');
+    }
+    if (!active) navigator.keyboard?.unlock?.();
+  });
+  document.addEventListener('keydown', event => {
+    if (document.fullscreenElement === $('instanceFrameWrap') && event.key === 'Escape') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  }, true);
 
   // Count play time only while the Game tab is open and visible.
   setInterval(() => {
@@ -459,7 +564,10 @@ function wireEvents() {
     }
   }, 5000);
   document.querySelectorAll('.nav-item').forEach(b => b.addEventListener('click', () => { if (b.dataset.view !== 'play') flushPlaytime(); }));
-  window.addEventListener('pagehide', flushPlaytime);
+  window.addEventListener('pagehide', () => {
+    flushPlaytime();
+    navigator.keyboard?.unlock?.();
+  });
 }
 
 function init() {
