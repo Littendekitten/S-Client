@@ -10,10 +10,23 @@ const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 
 let instances = [];
 let activeInstanceId = null;
+let pendingLaunchInstanceId = null;
+const PENDING_LAUNCH_KEY = 'sclient.pendingAquavoidLaunch';
 let installing = false;
 let modInstanceId = null; // instance whose mods the Mods tab is showing
 let lastTick = Date.now();
 let unsavedSeconds = 0;
+
+function setPendingLaunchInstance(id) {
+  pendingLaunchInstanceId = id || null;
+  try {
+    if (pendingLaunchInstanceId) sessionStorage.setItem(PENDING_LAUNCH_KEY, pendingLaunchInstanceId);
+    else sessionStorage.removeItem(PENDING_LAUNCH_KEY);
+  } catch (error) {
+    console.info('Could not persist the pending Aquavoid launch for a sign-in redirect.', error);
+  }
+}
+
 
 function toast(message) {
   const region = $('toastRegion');
@@ -325,16 +338,26 @@ function renderLibrary() {
 function updatePlayHeader() {
   const view = $('view-play');
   const inst = instances.find(i => i.id === activeInstanceId);
+  const pendingInst = instances.find(i => i.id === pendingLaunchInstanceId);
+  const needsAquavoidAuth = !window.AQUAVOID_BOOT?.authenticated;
   view.classList.toggle('no-instance', !inst);
+  view.classList.toggle('awaiting-aquavoid-auth', needsAquavoidAuth);
+  $('noInstance').hidden = needsAquavoidAuth;
+
   if (inst) {
     $('playEyebrow').textContent = `INSTANCE · AQUAVOID ${inst.version}`;
     $('playTitle').textContent = inst.name;
     $('playSubtitle').textContent = 'Ride the waves. Collect crystals. Make your own rules.';
     $('playTag').textContent = 'RUNNING';
+  } else if (needsAquavoidAuth) {
+    $('playEyebrow').textContent = 'AQUAVOID ACCOUNT REQUIRED';
+    $('playTitle').textContent = pendingInst ? `Connect to launch ${pendingInst.name}` : 'Connect to Aquavoid';
+    $('playSubtitle').textContent = 'S-Client is signed in. Sign in separately to your Aquavoid Google account to continue.';
+    $('playTag').textContent = 'LOGIN REQUIRED';
   } else {
     $('playEyebrow').textContent = 'YOUR GAME';
     $('playTitle').textContent = 'Game';
-    $('playSubtitle').textContent = 'Launch an instance from your Library.';
+    $('playSubtitle').textContent = 'Launch one of your installed Aquavoid instances from the Library.';
     $('playTag').textContent = 'NOT RUNNING';
   }
 }
@@ -353,13 +376,17 @@ function flushPlaytime() {
 async function launch(id) {
   const inst = instances.find(i => i.id === id);
   if (!inst) return;
-  // Authenticate in the top-level S-Client document first. Never make the
-  // original Aquavoid login popup run from an embedded about/srcdoc context.
+  // Keep the requested instance queued while the user completes the separate
+  // Aquavoid Google sign-in. The auth-ready event resumes this exact launch.
   if (!window.AQUAVOID_BOOT?.authenticated) {
-    toast('Connect your Aquavoid account in the Play tab before launching an instance.');
+    setPendingLaunchInstance(id);
+    updatePlayHeader();
+    const status = $('aquavoidAuthStatus');
+    if (status) status.textContent = `Connect your Aquavoid Google account to launch ${inst.name}.`;
     goto('play');
     return;
   }
+  setPendingLaunchInstance(null);
   if (activeInstanceId && activeInstanceId !== id) flushPlaytime();
   if (activeInstanceId !== id) {
     try { await mountInstance(inst); }
@@ -375,6 +402,7 @@ async function launch(id) {
 }
 
 function closeActiveInstance() {
+  setPendingLaunchInstance(null);
   flushPlaytime();
   activeInstanceId = null;
   clearFrame();
@@ -386,6 +414,7 @@ function deleteInstance(id) {
   const inst = instances.find(i => i.id === id);
   if (!inst) return;
   if (!confirm(`Delete "${inst.name}"? Your Aquavoid cloud save is kept, but this instance will be removed.`)) return;
+  if (pendingLaunchInstanceId === id) setPendingLaunchInstance(null);
   if (id === activeInstanceId) closeActiveInstance();
   instances = instances.filter(i => i.id !== id);
   deleteFiles(id).catch(() => {});
@@ -480,6 +509,19 @@ async function runInstall() {
 }
 
 function wireEvents() {
+  window.addEventListener('sclient:aquavoid-ready', () => {
+    const queuedId = pendingLaunchInstanceId;
+    if (queuedId && instances.some(inst => inst.id === queuedId)) {
+      setPendingLaunchInstance(null);
+      launch(queuedId);
+    } else {
+      updatePlayHeader();
+    }
+  });
+  window.addEventListener('sclient:aquavoid-disconnected', () => {
+    if (activeInstanceId) closeActiveInstance();
+    updatePlayHeader();
+  });
   document.addEventListener('click', e => {
     const g = e.target.closest('[data-goto]');
     if (g) { goto(g.dataset.goto); return; }
@@ -561,9 +603,23 @@ function wireEvents() {
 function init() {
   const stored = window.SCLIENT_BOOT?.clientPrefs?.instances;
   instances = (Array.isArray(stored) ? stored : []).map(sanitizeInstance).filter(Boolean).slice(0, MAX_INSTANCES);
+  try {
+    const storedPendingId = sessionStorage.getItem(PENDING_LAUNCH_KEY);
+    if (storedPendingId && instances.some(inst => inst.id === storedPendingId)) pendingLaunchInstanceId = storedPendingId;
+    else sessionStorage.removeItem(PENDING_LAUNCH_KEY);
+  } catch (error) {
+    console.info('Could not restore a pending Aquavoid launch.', error);
+  }
   wireEvents();
   updatePlayHeader();
   renderLibrary();
+  // A redirect-based Aquavoid login reloads the page. If auth completed before
+  // this launcher initialized, resume the stored instance here instead.
+  if (pendingLaunchInstanceId && window.AQUAVOID_BOOT?.authenticated) {
+    const queuedId = pendingLaunchInstanceId;
+    setPendingLaunchInstance(null);
+    launch(queuedId);
+  }
 }
 
 // Wait for the cloud profile to finish loading (app.js populates SClientCloud after sign-in).

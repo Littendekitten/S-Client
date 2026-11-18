@@ -383,9 +383,12 @@ button:not(:disabled):active{transform:translateY(1px)}
 .worldRuntime-merchant-balance{color:#bde5d7;font-weight:800;margin-top:14px;text-align:right;}
 
 /* ===== Launcher: Library + Discover (Modrinth-style) ===== */
-#view-play > :not(.page-heading):not(#noInstance):not(#instanceFrameWrap){display:none!important}
+#view-play > :not(.page-heading):not(#noInstance):not(#instanceFrameWrap):not(#aquavoidAuthGate):not(#aquavoidAccountBar){display:none!important}
 #view-play:not(.no-instance) > #noInstance{display:none}
 #view-play.no-instance > #instanceFrameWrap{display:none}
+#view-play.awaiting-aquavoid-auth > #noInstance{display:none!important}
+#view-play.awaiting-aquavoid-auth > #instanceFrameWrap{display:none!important}
+#view-play.awaiting-aquavoid-auth > #aquavoidAuthGate:not([hidden]){display:grid!important}
 .instance-frame-wrap{position:relative;width:100%;height:min(74vh,780px);min-height:480px;border:1px solid #274054;border-radius:13px;overflow:hidden;background:#07111d;box-shadow:0 24px 80px #0008}
 .instance-frame-wrap iframe{width:100%;height:100%;border:0;display:block;background:#07111d}
 .instance-frame-wrap:fullscreen{width:100vw;height:100vh;border:0;border-radius:0}
