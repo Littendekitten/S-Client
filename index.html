@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07101d">
+  <title>Aquavoid — S-Client</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="authGate" class="auth-gate" aria-labelledby="authTitle">
+    <section class="auth-card">
+      <div class="auth-brand"><span class="brand-mark">S</span><span>S-CLIENT</span></div>
+      <div class="auth-kicker">PRIVATE PLAYER PROFILE</div>
+      <h1 id="authTitle">Your S-Client.<br><span>Your account.</span></h1>
+      <p class="auth-copy">Sign in with Google to open S-Client. Your S-Client profile, imported mods, shader packs and client-only preferences are saved to the S-Client Firestore project.</p>
+      <button id="googleSignInButton" class="google-signin-button" type="button">
+        <svg viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.75 7.18l7.73 6C44.43 37.99 46.98 31.88 46.98 24.55z"/><path fill="#FBBC05" d="M10.53 28.59A14.4 14.4 0 0 1 9.75 24c0-1.59.27-3.13.76-4.59l-7.98-6.19A23.9 23.9 0 0 0 0 24c0 3.88.93 7.56 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.91-5.8l-7.73-6c-2.14 1.45-4.88 2.3-8.18 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+        <span>Continue with Google</span>
+      </button>
+      <button id="authRetryButton" class="auth-retry-button" type="button" hidden>RETRY CLOUD CONNECTION</button>
+      <p id="authStatus" class="auth-status" role="status" aria-live="polite">Sign in is required before you can access the client.</p>
+      <div class="auth-foot"><span class="live-dot"></span> S-CLIENT PROFILE + MODS CLOUD <span class="auth-foot-divider">·</span> AQUAVOID GAME SAVE CLOUD</div>
+    </section>
+  </main>
+  <div class="client-shell" style="display:none">
+    <header class="topbar">
+      <a class="brand" href="#play" aria-label="S-Client home"><span class="brand-mark">S</span><span>S-CLIENT</span></a>
+      <div class="topbar-center"><span class="live-dot"></span><span>S-CLIENT CLOUD</span><span class="version">v1.15.4</span></div>
+      <div class="topbar-right">
+        <span id="cloudStatus" class="cloud-status" aria-live="polite"><span class="live-dot"></span> CLOUD SAVED</span>
+        <div class="profile-chip" title="Signed in with Google"><img id="profilePhoto" class="profile-photo" alt="" hidden><span id="profileAvatar" class="profile-avatar">S</span><span id="profileName">PLAYER</span></div>
+        <button id="signOutButton" class="signout-button" type="button">SIGN OUT</button>
+      </div>
+    </header>
+
+    <div class="client-layout">
+      <aside class="sidebar" aria-label="Main navigation">
+        <div class="side-label">CLIENT</div>
+        <button class="nav-item active" data-view="play" type="button"><span class="nav-icon">▶</span><span>Play</span></button>
+        <button class="nav-item" data-view="mods" type="button"><span class="nav-icon">◇</span><span>Mods</span><span class="nav-count" id="modCount">0</span></button>
+        <button class="nav-item" data-view="settings" type="button" title="Settings"><span class="nav-icon">⚙</span><span>Settings</span></button>
+        <div class="sidebar-bottom"><div class="side-label">SESSION</div><div class="session-status"><span class="live-dot"></span><span>Two-account cloud</span></div><p>Aquavoid progress syncs to Aquavoid Firestore.</p></div>
+      </aside>
+
+      <main class="main-content">
+        <section id="view-play" class="view view-active">
+          <div class="page-heading">
+            <div><div class="eyebrow">YOUR GAME</div><h1>Play Aquavoid</h1><p>Ride the waves. Collect crystals. Make your own rules.</p></div>
+            <div class="heading-tag"><span class="live-dot"></span> READY TO PLAY</div>
+          </div>
+
+          <section id="aquavoidAuthGate" class="aquavoid-auth-gate" aria-labelledby="aquavoidAuthTitle">
+            <div class="aquavoid-auth-card">
+              <div class="auth-kicker">SECOND ACCOUNT REQUIRED</div>
+              <h2 id="aquavoidAuthTitle">Connect your Aquavoid account</h2>
+              <p>Your S-Client account unlocks the client. Sign in with your Aquavoid account to play and load your Aquavoid cloud save.</p>
+              <button id="aquavoidSignInButton" class="google-signin-button aquavoid-signin-button" type="button"><span>Continue with Google · Aquavoid</span></button>
+              <p id="aquavoidAuthStatus" class="auth-status" role="status" aria-live="polite">Waiting for Aquavoid sign-in.</p>
+              <button id="aquavoidRetryButton" class="auth-retry-button" type="button" hidden>RETRY AQUAVOID CONNECTION</button>
+            </div>
+          </section>
+          <div id="aquavoidAccountBar" class="aquavoid-account-bar" hidden>
+            <span class="live-dot"></span><span id="aquavoidAccountLabel">AQUAVOID ACCOUNT CONNECTED · CLOUD SAVE READY</span>
+            <button id="aquavoidSignOutButton" class="quiet-button" type="button">SWITCH AQUAVOID ACCOUNT</button>
+          </div>
+          <section class="game-window" id="gameWindow" aria-label="Aquavoid game" hidden>
+            <div class="game-toolbar">
+              <div class="game-title"><span class="game-title-mark">S</span><span>AQUAVOID</span><span class="game-separator">/</span><span class="game-subtitle">LOCAL BUILD</span></div>
+              <div class="game-toolbar-actions">
+                <span class="mode-pill" id="modePill">MENU</span>
+                <button class="toolbar-button" id="pauseButton" type="button" title="Pause game" aria-label="Pause game" disabled>Ⅱ</button>
+                <button class="toolbar-button fullscreen-button" id="fullscreenButton" type="button" title="Fullscreen game" aria-label="Fullscreen game">⛶</button>
+              </div>
+            </div>
+            <div id="gameStage" class="game-stage">
+              <div id="world" class="world" aria-label="Aquavoid 3D world"></div>
+
+              <div id="hud" class="hud">
+                <div class="hud-stat"><span id="sl">CRYSTALS</span><strong id="s">0</strong></div>
+                <div class="hud-center"><div id="cb" class="combo"></div></div>
+                <div class="hud-stat hud-time"><span id="tl">TIME</span><strong id="t">90</strong></div>
+              </div>
+              <div id="hpb" class="health-panel" style="display:none"><span>HULL</span><div class="health-track"><i id="hpf"></i></div></div>
+              <div id="ban" class="banner"></div>
+
+              <div id="card" class="game-card" style="display:flex">
+                <div class="game-card-inner">
+                  <div class="game-kicker">A LITTLE ARCADE ADVENTURE</div>
+                  <h2>AQUAVOID</h2>
+                  <p class="game-description">The ground is a living wave. Ride each crest to be thrown skyward and catch the floating crystals. Chain catches within 7 seconds to build a multiplier. Teal crystals add 5 seconds in Levels and heal you in Endless. Your ship fires automatically at sea monsters.</p>
+                  <p class="controls-copy">MOVE <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> &nbsp; JUMP <kbd>SPACE</kbd> &nbsp; DASH <kbd>SHIFT</kbd><br>LOOK: drag the mouse, or <kbd>Q</kbd> <kbd>E</kbd> / arrow keys. On touch: left half moves, right half looks.</p>
+                  <p id="res" class="result-text"></p>
+                  <div class="captain-name-card">
+                    <div class="captain-name-copy"><label for="nameInput">CAPTAIN NAME</label><small>This name appears on the Endless leaderboard.</small></div>
+                    <div class="captain-name-controls"><input id="nameInput" type="text" maxlength="16" autocomplete="nickname" spellcheck="false" placeholder="Your captain name"><button id="nameSave" class="captain-save-button" type="button">SAVE NAME</button></div>
+                    <p id="nameNote" role="status" aria-live="polite"></p>
+                  </div>
+                  <div class="menu-actions"><button id="lvb" class="primary-button" type="button">LEVELS</button><button id="endb" class="secondary-button" type="button">ENDLESS</button></div>
+                  <div class="menu-actions menu-actions-small"><button id="shopb" class="soft-button" type="button">SHIP SHOP</button><button id="wpb" class="soft-button" type="button">WEAPONS</button><button id="lbb" class="soft-button leaderboard-menu-button" type="button">LEADERBOARD</button><div id="modGameModes" class="mod-game-modes" aria-label="Enabled mod game modes"></div></div>
+                  <div id="coins" class="coin-balance">COINS 0</div>
+                </div>
+              </div>
+
+              <div id="lv" class="sheet" style="display:none">
+                <div class="sheet-card"><div class="sheet-heading"><div><span class="game-kicker">CAMPAIGN</span><h3>Choose a level</h3></div></div><p class="sheet-copy">Complete a level to unlock the next one.</p><div id="lgrid" class="item-grid"></div><button id="lback" class="soft-button" type="button">BACK TO MENU</button></div>
+              </div>
+
+              <div id="shop" class="sheet" style="display:none">
+                <div class="sheet-card"><div class="sheet-heading"><div><span class="game-kicker">THE FLEET</span><h3>Ship shop</h3></div></div><div id="coins2" class="shop-balance"></div><div id="grid" class="item-grid"></div><p id="note" class="sheet-note"></p><button id="back" class="soft-button" type="button">BACK TO MENU</button></div>
+              </div>
+
+              <section id="worldRuntimeHud" class="worldRuntime-hud" hidden aria-label="Island WorldRuntimes HUD">
+                <div class="worldRuntime-topbar"><div><span class="worldRuntime-kicker">ISLAND SURVIVORS</span><strong id="worldRuntimeLocation">YOUR SHIP</strong></div><div class="worldRuntime-top-actions"><span id="worldRuntimeQuickInventory">🪵 3   🪨 2   🌿 3   🫐 2</span><span id="worldRuntimeHealthReadout" class="worldRuntime-health-readout">♥ 100</span><button id="worldRuntimeInteractButton" type="button">INTERACT · E</button><button id="worldRuntimeSailButton" type="button" hidden>SAIL THE SHIP</button><button id="worldRuntimeCameraButton" type="button" hidden>FIRST PERSON · V</button><button id="worldRuntimeAttackButton" type="button">ATTACK · F</button><button id="worldRuntimeInventoryButton" type="button">BACKPACK / CRAFT</button><button id="worldRuntimeExitButton" type="button">LEAVE WORLD</button></div></div>
+                <div class="worldRuntime-reticle" aria-hidden="true">+</div><div class="worldRuntime-prompt" id="worldRuntimePrompt">WASD MOVE · MOUSE LOOK · E INTERACT · I BACKPACK</div>
+                <section id="worldRuntimeInventoryPanel" class="worldRuntime-panel" hidden>
+                  <div class="worldRuntime-panel-heading"><div><span class="worldRuntime-kicker">YOUR SUPPLIES</span><h3>Backpack & crafting</h3></div><button id="worldRuntimeInventoryClose" class="worldRuntime-close" type="button">×</button></div>
+                  <div id="worldRuntimeInventoryStats" class="worldRuntime-inventory-grid"></div><div id="worldRuntimeToolStats" class="worldRuntime-tool-stats"></div>
+                  <div class="worldRuntime-crafting-grid">
+                    <button id="worldRuntimeCraftAxe" type="button">🪓 CRAFT AXE <small>3 wood · 2 stone</small></button>
+                    <button id="worldRuntimeCraftPickaxe" type="button">⛏ CRAFT PICKAXE <small>2 wood · 3 stone</small></button>
+                    <button id="worldRuntimeCraftPlanks" type="button">🪚 MAKE PLANKS <small>2 wood → 3 planks</small></button>
+                    <button id="worldRuntimeCraftRope" type="button">🪢 TWIST ROPE <small>3 fiber → 1 rope</small></button>
+                    <button id="worldRuntimeCraftChest" type="button">📦 CRAFT CHEST <small>8 planks · 3 rope</small></button>
+                    <button id="worldRuntimePlaceChest" type="button">PLACE CHEST</button>
+                  </div>
+                </section>
+                <section id="worldRuntimeChestPanel" class="worldRuntime-panel worldRuntime-chest-panel" hidden>
+                  <div class="worldRuntime-panel-heading"><div><span class="worldRuntime-kicker">STORAGE</span><h3 id="worldRuntimeChestTitle">SHIP LOCKER</h3></div><button id="worldRuntimeChestClose" class="worldRuntime-close" type="button">×</button></div>
+                  <div id="worldRuntimeChestStats" class="worldRuntime-inventory-grid"></div>
+                  <div class="worldRuntime-chest-actions"><button id="worldRuntimeChestStore" type="button">STORE ALL BACKPACK ITEMS</button><button id="worldRuntimeChestTake" type="button">TAKE ALL MATERIALS</button></div>
+                </section>
+                <section id="worldRuntimeMerchantPanel" class="worldRuntime-panel worldRuntime-merchant-panel" hidden>
+                  <div class="worldRuntime-panel-heading"><div><span class="worldRuntime-kicker">TRADING POST</span><h3 id="worldRuntimeMerchantTitle">MERCHANT</h3></div><button id="worldRuntimeMerchantClose" class="worldRuntime-close" type="button">×</button></div>
+                  <p id="worldRuntimeMerchantGreeting" class="worldRuntime-merchant-greeting"></p>
+                  <div id="worldRuntimeMerchantWares" class="worldRuntime-merchant-wares"></div>
+                  <div class="worldRuntime-merchant-balance" id="worldRuntimeMerchantBalance"></div>
+                </section>
+              </section>
+
+              <div id="wp" class="sheet" style="display:none">
+                <div class="sheet-card"><div class="sheet-heading"><div><span class="game-kicker">ARMORY</span><h3>Weapon shop</h3></div></div><div id="coins3" class="shop-balance"></div><div id="wgrid" class="item-grid"></div><p id="wnote" class="sheet-note"></p><button id="wback" class="soft-button" type="button">BACK TO MENU</button></div>
+              </div>
+
+              <div id="lb" class="sheet" style="display:none">
+                <div class="sheet-card leaderboard-sheet-card">
+                  <div class="sheet-heading"><div><span class="game-kicker">ENDLESS RECORDS</span><h3>Leaderboard</h3></div><span class="leaderboard-live-pill"><i></i> AQUAVOID CLOUD</span></div>
+                  <p id="lbNote" class="sheet-copy" role="status" aria-live="polite">Loading leaderboard…</p>
+                  <ol id="lbList" class="leaderboard-list"></ol>
+                  <p id="lbMine" class="leaderboard-mine"></p>
+                  <button id="lbBack" class="soft-button" type="button">BACK TO MENU</button>
+                </div>
+              </div>
+
+              <div id="pauseScreen" class="pause-screen" style="display:none">
+                <div class="pause-card"><div class="game-kicker">SESSION PAUSED</div><h3>Take a breather.</h3><button id="resumeButton" class="primary-button" type="button">RESUME</button><button id="leaveButton" class="soft-button pause-menu-button" type="button">BACK TO MENU</button></div>
+              </div>
+
+              <button class="tb" id="jb" type="button">JUMP</button><button class="tb" id="db" type="button">DASH</button>
+              <div id="gameHint" class="game-hint">CLICK GAME TO LOCK MOUSE · PAUSE WITH THE Ⅱ BUTTON</div>
+              <div id="modLoadingScreen" class="mod-loading-screen" hidden role="status" aria-live="polite">
+                <div class="mod-loading-card"><div class="mod-loading-mark">S</div><div class="mod-loading-kicker">AQUAVOID WORLD INITIALIZATION</div><h2 id="modLoadingTitle">Preparing your world</h2><p id="modLoadingMessage">Checking enabled mods and building the game session…</p><div class="mod-loading-track"><span id="modLoadingProgress"></span></div><div class="mod-loading-meta"><span id="modLoadingStep">0 / 4</span><span id="modLoadingPercent">0%</span></div><div class="mod-loading-orbit"><i></i><i></i><i></i></div></div>
+              </div>
+            </div>
+          </section>
+          <div class="below-game"><span><span class="live-dot"></span> Game runs locally in this page</span><span>Aquavoid progress saves to the Aquavoid Firestore account</span></div>
+        </section>
+
+        <section id="view-mods" class="view">
+          <div id="modsLibraryView">
+            <div class="page-heading mods-heading">
+              <div><div class="eyebrow">YOUR PRIVATE LIBRARY</div><h1>Mod manager</h1><p>Nothing is preinstalled. Only mods you explicitly import appear here; there is no public catalogue or anonymous downloads.</p></div>
+              <button id="importModButton" class="import-button" type="button">＋ IMPORT MODS / ZIP</button>
+            </div>
+            <div class="mods-layout">
+              <div class="mods-main">
+                <div class="section-heading"><div><h2>Your installed mods</h2><p>Your library starts empty. SCL mods, settings and custom shader packs sync to your signed-in Firestore account.</p></div><span class="count-chip" id="installedLabel">0 OWNED</span></div>
+                <div id="installedMods" class="installed-mods"><div class="empty-state"><div class="empty-icon">◇</div><h3>Your private mod library is empty</h3><p>Import one or more <code>.sclient</code> files, or a ZIP containing mods and shader packs. Nothing is preinstalled or publicly downloadable. Community mods use the sandboxed SCL language.</p><button class="outline-button" id="emptyImportButton" type="button">IMPORT MODS</button></div></div>
+              </div>
+              <aside class="mods-aside">
+                <div class="aside-card"><div class="aside-icon">⌘</div><h3>Your library, your files</h3><p>S-Client does not publish a public mod catalogue. You can export only mods already present in your own library. SCL source is validated by the client and runs in a sandboxed command interpreter; uploaded JavaScript is never executed.</p><div class="aside-rule"></div><h4>BATCH IMPORT</h4><ol><li>Select several <code>.sclient</code> files at once.</li><li>Or select a ZIP archive.</li><li>S-Client extracts supported mod and shader-pack files.</li><li>Your library syncs to your Google account.</li></ol></div>
+                <div class="aside-card safety-card"><span class="live-dot"></span><div><h4>PRIVATE FIRESTORE LIBRARY</h4><p>Each account sees only its own installed mods and custom shader packs. No user-to-user mod sharing is enabled.</p></div></div>
+              </aside>
+            </div>
+          </div>
+          <div id="modDetailView" hidden>
+            <div class="page-heading mods-heading"><div><div class="eyebrow">YOUR PRIVATE MOD PAGE</div><h1>Mod settings</h1><p>Configure this mod here. Enable it, then launch Aquavoid to apply its changes.</p></div><button id="backToModLibrary" class="import-button" type="button">← YOUR MOD LIBRARY</button></div>
+            <div id="modDetailContent" class="mod-detail-content"></div>
+          </div>
+          <input id="modFileInput" type="file" accept=".sclient,.shadersclient,.zip,application/zip,application/json,.json" multiple hidden>
+        </section>
+
+        <section id="view-settings" class="view">
+          <div class="page-heading settings-page-heading">
+            <div><div class="eyebrow">MAKE IT YOURS</div><h1>Settings</h1><p>Personalize how S-Client looks and how your profile appears.</p></div>
+            <div class="heading-tag"><span class="live-dot"></span> PRIVATE ACCOUNT</div>
+          </div>
+
+          <div class="settings-layout">
+            <form id="profileSettingsForm" class="settings-card profile-settings-card" autocomplete="on">
+              <div class="settings-card-heading">
+                <div class="settings-card-icon">✦</div>
+                <div><h2>Public display name</h2><p>Choose the name shown in the S-Client interface instead of your Google account name.</p></div>
+              </div>
+              <label class="settings-field-label" for="publicNameInput">DISPLAY NAME</label>
+              <input id="publicNameInput" class="settings-text-input" type="text" name="nickname" autocomplete="nickname" minlength="2" maxlength="24" pattern=".{2,24}" placeholder="e.g. KitaCat" required>
+              <div class="settings-field-hint">2–24 characters. Letters, numbers, spaces, dots, underscores and hyphens are supported.</div>
+
+              <label class="settings-check-row" for="showProfilePhotoInput">
+                <input id="showProfilePhotoInput" type="checkbox">
+                <span><strong>Show my Google profile photo</strong><small>Turn this off to use an S-Client avatar instead. Your Google account name is never used as your on-screen display name.</small></span>
+              </label>
+
+              <div class="settings-privacy-note"><span class="settings-privacy-icon">⌑</span><span><strong>Your sign-in identity stays separate.</strong><small>Your Google name and email are used for authentication and account ownership, not as your S-Client display name.</small></span></div>
+              <div class="settings-form-footer">
+                <button id="saveProfileSettingsButton" class="primary-button settings-save-button" type="submit">SAVE CHANGES</button>
+                <span id="settingsSaveStatus" role="status" aria-live="polite"></span>
+              </div>
+            </form>
+
+            <aside class="settings-side-column">
+              <section class="settings-card settings-info-card">
+                <div class="settings-card-icon settings-icon-green">✓</div>
+                <div class="settings-info-kicker">ACCOUNT STATUS</div>
+                <h2>Google account connected</h2>
+                <p>Your S-Client display name, imported mods, shader packs and client-only items stay in S-Client Firestore. Aquavoid coins, ships, weapons, levels and records are saved separately to your Aquavoid account.</p>
+                <div class="settings-info-line"><span class="live-dot"></span> CLOUD SAVES ENABLED</div>
+              </section>
+              <section class="settings-card settings-info-card help-card">
+                <div class="settings-card-icon">?</div>
+                <div class="settings-info-kicker">QUICK TIP</div>
+                <h2>Make S-Client yours</h2>
+                <p>Your display name can be changed anytime. It does not change your Google account or affect your saved game progress.</p>
+                <button id="settingsGoPlayButton" class="quiet-button settings-link-button" type="button">BACK TO AQUAVOID →</button>
+              </section>
+            </aside>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+  <div id="toastRegion" class="toast-region" aria-live="polite"></div>
+
+  <script>
+    // Three.js is optional for the client UI. If both mirrors fail, app.js starts
+    // the built-in 2D compatibility game instead of aborting all button handlers.
+    window.__sclientThreeReady = new Promise(resolve => {
+      const sources = [
+        'https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js',
+        'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js'
+      ];
+      let index = 0;
+      const loadNext = () => {
+        if (window.THREE) { resolve(true); return; }
+        if (index >= sources.length) { resolve(false); return; }
+        const script = document.createElement('script');
+        script.src = sources[index++];
+        script.async = true;
+        script.onload = () => resolve(!!window.THREE);
+        script.onerror = loadNext;
+        document.head.appendChild(script);
+      };
+      loadNext();
+    });
+  </script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
