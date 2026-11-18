@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+
+<title>AQUAVOID — Survive the Unknown Ocean</title>
+
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,800&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<!-- in-run HUD -->
+<div id="hud">
+    <div>
+        <span id="sl">Crystals</span>
+        <small id="s">0</small>
+    </div>
+
+    <div id="cb"></div>
+
+    <div style="text-align:right">
+        <span id="tl">Time</span>
+        <small id="t">90</small>
+    </div>
+</div>
+
+<!-- island HUD -->
+<div id="hubhud">
+    <b>AQUAVOID Island</b>
+    <span id="hubInfo"></span>
+    <span id="hubHint">Sail to a glowing ring and press F. On touch, tap the button that appears.</span>
+</div>
+
+<div id="ban"></div>
+<div id="hpb"><i id="hpf"></i></div>
+
+<button id="dockPrompt" type="button" hidden></button>
+
+<div class="tb" id="jb">Jump</div>
+<div class="tb" id="db">Dash</div>
+
+<!-- Ship Shop building -->
+<div id="shop">
+    <div>
+        <h2>Ship Shop</h2>
+        <p id="coins2"></p>
+        <div id="grid"></div>
+        <p id="note"></p>
+        <button id="back">Back to island</button>
+    </div>
+</div>
+
+<!-- Weapon Shop building -->
+<div id="wp">
+    <div>
+        <h2>Weapon Shop</h2>
+        <p id="coins3"></p>
+        <div id="wgrid"></div>
+        <p id="wnote"></p>
+        <button id="wback">Back to island</button>
+    </div>
+</div>
+
+<!-- Lighthouse = Levels -->
+<div id="lv">
+    <div>
+        <h2>Levels</h2>
+        <div id="lgrid"></div>
+        <button id="lback">Back to island</button>
+    </div>
+</div>
+
+<!-- Trophy Hall = Leaderboard -->
+<div id="lb">
+    <div>
+        <h2>Leaderboard</h2>
+        <p id="lbNote"></p>
+        <ol id="lbList"></ol>
+        <p id="lbMine"></p>
+        <button id="lbBack">Back to island</button>
+    </div>
+</div>
+
+<!-- Captain's Cabin = name + Google account + controls -->
+<div id="cab">
+    <div>
+        <h2>Captain's Cabin</h2>
+
+        <div id="authArea" aria-live="polite">
+            <p id="authStatus">Checking Google sign-in...</p>
+            <p id="authUser" hidden></p>
+
+            <button id="googleSignIn" type="button">
+                Sign in with Google
+            </button>
+
+            <button id="googleSignOut" type="button" hidden>
+                Sign out
+            </button>
+        </div>
+
+        <div id="nameArea">
+            <label for="nameInput">Captain name</label>
+            <input id="nameInput" type="text" maxlength="16" autocomplete="nickname" spellcheck="false" placeholder="Your name">
+            <button id="nameSave" type="button">Save name</button>
+            <p id="nameNote"></p>
+        </div>
+
+        <p class="howto">
+            Move W A S D &nbsp; Jump Space &nbsp; Dash Shift &nbsp; Enter a building F
+            <br>
+            Look: drag the mouse, or Q E and arrow keys.
+            On touch: left half moves, right half looks.
+            <br>
+            Ride the crests, catch crystals and sink sea monsters.
+            Your ship fires automatically.
+        </p>
+
+        <button id="cabBack">Back to island</button>
+    </div>
+</div>
+
+<!-- Results after a run -->
+<div id="rs">
+    <div>
+        <h2 id="rsTitle">Results</h2>
+        <p id="res"></p>
+        <button id="next" hidden>Next level</button>
+        <button id="again">Play again</button>
+        <button id="home">Back to island</button>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+<script>
+/* Modules and Google login do not work from file:// pages */
+if (location.protocol === 'file:') {
+    addEventListener('DOMContentLoaded', function () {
+        var s = document.getElementById('authStatus');
+        if (s) s.textContent = 'Open the game through a web server (for example http://localhost:8000), not by double-clicking the file. Browsers block the game script and Google login on file:// pages.';
+    });
+}
+</script>
+
+<script type="module" src="app.js"></script>
+
+</body>
+</html>
