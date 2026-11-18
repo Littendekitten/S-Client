@@ -710,6 +710,16 @@ const googleSignOutButton = $('googleSignOut');
 if (googleSignInButton) {
     googleSignInButton.addEventListener('click', async () => {
         googleSignInButton.disabled = true;
+        $('authStatus').textContent = 'Opening Google sign-in window... (allow popups for this site)';
+
+        // If the popup finishes/closes but the browser blocks the result, the
+        // promise never settles and the button stays stuck on a loading cursor.
+        const stuckTimer = setTimeout(() => {
+            googleSignInButton.disabled = false;
+            if (!auth.currentUser) {
+                $('authStatus').textContent = 'Sign-in did not finish. Click the button to try again.';
+            }
+        }, 45000);
 
         try {
             await setPersistence(
@@ -742,6 +752,7 @@ if (googleSignInButton) {
                 hints[error.code] || ('Login failed: ' + error.message);
 
         } finally {
+            clearTimeout(stuckTimer);
             googleSignInButton.disabled = false;
         }
     });

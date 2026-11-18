@@ -2033,6 +2033,7 @@ if (googleSignInButton) {
                 hints[error.code] || ('Login failed: ' + error.message);
 
         } finally {
+            clearTimeout(stuckTimer);
             googleSignInButton.disabled = false;
         }
     });
