@@ -330,6 +330,10 @@ let aquavoidAuthRevision = 0;
 let aquavoidSaveQueue = Promise.resolve();
 let aquavoidWriteError = null;
 window.AQUAVOID_BOOT = { authenticated: false, gameSave: null, uid: null, cloudReady: false };
+// Firestore auth can resolve before the game API has finished initializing.
+// Wait for the game API before applying the cloud save or creating a new save.
+let resolveAquavoidGameReady;
+const aquavoidGameReady = new Promise(resolve => { resolveAquavoidGameReady = resolve; });
 
 function setAquavoidStatus(message, error = false) {
   if (!aquavoidStatus) return;
@@ -517,8 +521,12 @@ async function onAquavoidUser(user) {
   try {
     const saveRef = doc(aquavoidFirestore, 'players', user.uid);
     const snapshot = await getDoc(saveRef);
+    // Do not treat an unfinished game boot as a missing player save. The old
+    // code could see gameSave === null while this read was still in flight and
+    // write default progress over the account's real save.
+    const gameApi = await aquavoidGameReady;
     // Ignore a stale response if the account was switched while the request
-    // was in flight.
+    // or game initialization was in flight.
     if (revision !== aquavoidAuthRevision || aquavoidAuth.currentUser?.uid !== user.uid) return;
     const gameSave = snapshot.exists() ? (snapshot.data() || {}) : null;
     window.AQUAVOID_BOOT = {
@@ -530,15 +538,13 @@ async function onAquavoidUser(user) {
     };
     aquavoidCloudReady = true;
     paintAquavoidAccount(true, user);
-    if (window.AquavoidGame?.loadSave) {
-      window.AquavoidGame.loadSave(gameSave);
-      if (!snapshot.exists()) await window.AquavoidGame.save();
-      else if (window.AquavoidGame.syncLeaderboard) {
-        // Backfill existing Endless records into the leaderboard collection on
-        // sign-in, so returning players do not need to earn another record.
-        try { await window.AquavoidGame.syncLeaderboard(); }
-        catch (error) { console.warn('Existing Aquavoid leaderboard record could not be synced:', error); }
-      }
+    gameApi.loadSave(gameSave);
+    if (!snapshot.exists()) await gameApi.save();
+    else if (gameApi.syncLeaderboard) {
+      // Backfill existing Endless records into the leaderboard collection on
+      // sign-in, so returning players do not need to earn another record.
+      try { await gameApi.syncLeaderboard(); }
+      catch (error) { console.warn('Existing Aquavoid leaderboard record could not be synced:', error); }
     }
     setAquavoidStatus('Aquavoid account and cloud save connected successfully.');
     if (aquavoidCloudRetry) aquavoidCloudRetry.hidden = true;
@@ -3112,6 +3118,10 @@ function updateCoins() {
 // Aquavoid game progress belongs to the separate Aquavoid Firebase project.
 function saveAquavoidGame() {
     if (!window.AQUAVOID_BOOT?.authenticated || !window.AquavoidCloud?.user) return Promise.resolve(false);
+    // Never write defaults while the initial Firestore read is still pending or
+    // has failed. The save is enabled only after the existing cloud document
+    // was loaded successfully (or confirmed not to exist).
+    if (!window.AQUAVOID_BOOT?.cloudReady) return Promise.resolve(false);
     if(worldSessionActive){worldRuntimeSave.health=worldRuntimePlayerHealth;worldRuntimeSave.ship={x:P.position.x,z:P.position.z,heading:worldRuntimeShipHeading};}
     const data = {
         coins,
@@ -4422,15 +4432,14 @@ window.AquavoidGame = Object.freeze({
     unlockShips: () => { owned = SKINS.map((_, index) => index); save(); showCoins(); drawShop(); },
     getFeature: id => modFlag(String(id))
 });
+resolveAquavoidGameReady(window.AquavoidGame);
 
 // Keep toolbar and menu state in sync with the game view.
 $('modePill').textContent = 'MENU';
 $('pauseButton').disabled = true;
 updateCoins();
 requestAnimationFrame(frame);
-if (window.AQUAVOID_BOOT?.authenticated) {
-    window.AquavoidGame.loadSave(window.AQUAVOID_BOOT.gameSave || {});
-    if (!window.AQUAVOID_BOOT.gameSave) saveAquavoidGame().catch(() => {});
-    else window.AquavoidGame.syncLeaderboard().catch(error => console.warn('Existing leaderboard record could not be synced:', error));
-}
+// Initial cloud loading is coordinated by onAquavoidUser() above. Do not
+// save here: at this point Firebase may have confirmed the user but still be
+// waiting for the player's Firestore document to finish loading.
 })();
