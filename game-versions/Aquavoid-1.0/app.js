@@ -1996,7 +1996,15 @@ requestAnimationFrame(frame);
 const googleSignInButton = $('googleSignIn');
 const googleSignOutButton = $('googleSignOut');
 
-if (googleSignInButton) {
+// Inside the S-Client launcher the account is chosen once at launcher start.
+// The game must never ask for a second login or start its own redirect.
+const EMBEDDED_IN_SCLIENT = new URLSearchParams(location.search).has('sclientInstance');
+if (EMBEDDED_IN_SCLIENT) {
+    if (googleSignInButton) googleSignInButton.hidden = true;
+    if (googleSignOutButton) googleSignOutButton.hidden = true;
+}
+
+if (googleSignInButton && !EMBEDDED_IN_SCLIENT) {
     googleSignInButton.addEventListener('click', async () => {
         googleSignInButton.disabled = true;
 
@@ -2039,7 +2047,7 @@ if (googleSignInButton) {
     });
 }
 
-if (googleSignOutButton) {
+if (googleSignOutButton && !EMBEDDED_IN_SCLIENT) {
     googleSignOutButton.addEventListener('click', async () => {
         try {
             await signOut(auth);
@@ -2075,7 +2083,7 @@ onAuthStateChanged(auth, async user => {
             user.displayName || user.email;
 
         $('googleSignIn').hidden = true;
-        $('googleSignOut').hidden = false;
+        $('googleSignOut').hidden = EMBEDDED_IN_SCLIENT;
 
         try {
             await loadCloudSave(user);
@@ -2097,16 +2105,17 @@ onAuthStateChanged(auth, async user => {
         }
 
     } else {
-        $('authStatus').textContent =
-            'Sign in with Google to enable cloud saves.';
+        $('authStatus').textContent = EMBEDDED_IN_SCLIENT
+            ? 'Your Aquavoid login expired. Use SWITCH AQUAVOID ACCOUNT in the S-Client launcher to reconnect.'
+            : 'Sign in with Google to enable cloud saves.';
 
         $('authUser').hidden = true;
-        $('googleSignIn').hidden = false;
+        $('googleSignIn').hidden = EMBEDDED_IN_SCLIENT;
         $('googleSignOut').hidden = true;
     }
 });
 
 // Finish a redirect sign-in if a popup was blocked.
-getRedirectResult(auth).catch(error => {
+if (!EMBEDDED_IN_SCLIENT) getRedirectResult(auth).catch(error => {
     console.warn('Redirect sign-in failed:', error);
 });
