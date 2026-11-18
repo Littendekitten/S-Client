@@ -1,5 +1,5 @@
 import { initializeApp, getApps } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
-import { getAuth, GoogleAuthProvider, signInWithRedirect, getRedirectResult, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, browserSessionPersistence } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
+import { getAuth, GoogleAuthProvider, signInWithRedirect, signInWithPopup, getRedirectResult, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, browserSessionPersistence } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, serverTimestamp, collection, query, where, orderBy, limit, getDocs } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 const firebaseConfig = {
@@ -38,6 +38,39 @@ let signedInUid = null;
 let cloudPendingWrites = 0;
 let cloudWriteError = null;
 let cloudHasSaved = false;
+
+// Popup first (works on custom domains where redirect state is blocked by
+// browser storage partitioning), redirect only as a fallback.
+async function googleSignIn(auth, provider) {
+  try {
+    await signInWithPopup(auth, provider);
+  } catch (error) {
+    const fallback = ['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment', 'auth/web-storage-unsupported'];
+    if (fallback.includes(error?.code)) { await signInWithRedirect(auth, provider); return; }
+    throw error;
+  }
+}
+
+// Registered immediately so the button works while the rest of startup is still loading.
+signInButton.addEventListener('click', async () => {
+  signInButton.disabled = true;
+  showAuthMessage('Opening Google sign-in…');
+  try {
+    await googleSignIn(firebaseAuth, googleProvider);
+  } catch (error) {
+    console.error('Google sign-in failed:', error);
+    signInButton.disabled = false;
+    const messages = {
+      'auth/unauthorized-domain': 'Add this exact S-Client website hostname to Authorized domains in the S-Client Firebase project.',
+      'auth/operation-not-allowed': 'Enable the Google provider in S-Client Firebase Authentication.',
+      'auth/invalid-api-key': 'The S-Client Firebase API key is invalid or restricted.',
+      'auth/network-request-failed': 'Network error while contacting Google/Firebase. Check your connection and try again.',
+      'auth/popup-closed-by-user': 'Sign-in window was closed. Click the button to try again.',
+      'auth/cancelled-popup-request': 'Sign-in was cancelled. Click the button to try again.'
+    };
+    showAuthMessage(messages[error?.code] || `Google sign-in failed (${error?.code || 'unknown error'}): ${error.message}`, true);
+  }
+});
 
 function showAuthMessage(message, isError = false) {
   authStatus.textContent = message;
@@ -234,25 +267,6 @@ try {
   showAuthMessage(messages[error?.code] || `Google sign-in failed (${error?.code || 'unknown error'}): ${error?.message || 'Check the Firebase error details.'}`, true);
 }
 
-signInButton.addEventListener('click', async () => {
-  signInButton.disabled = true;
-  showAuthMessage('Redirecting to Google for S-Client sign-in…');
-  try {
-    // Redirect flow avoids popup COOP/window.closed warnings and is reliable
-    // when S-Client is opened from a browser tab or installed web app.
-    await signInWithRedirect(firebaseAuth, googleProvider);
-  } catch (error) {
-    console.error('Google redirect sign-in failed:', error);
-    signInButton.disabled = false;
-    const messages = {
-      'auth/unauthorized-domain': 'Add this exact S-Client website hostname to Authorized domains in the S-Client Firebase project.',
-      'auth/operation-not-allowed': 'Enable the Google provider in S-Client Firebase Authentication.',
-      'auth/invalid-api-key': 'The S-Client Firebase API key is invalid or restricted.',
-      'auth/network-request-failed': 'Network error while contacting Google/Firebase. Check your connection and try again.'
-    };
-    showAuthMessage(messages[error?.code] || `Google sign-in failed (${error?.code || 'unknown error'}): ${error.message}`, true);
-  }
-});
 retryButton.addEventListener('click', () => tryBootstrap(firebaseAuth.currentUser || pendingUser));
 document.getElementById('signOutButton').addEventListener('click', async () => {
   const button = document.getElementById('signOutButton');
@@ -451,12 +465,10 @@ window.AquavoidCloud = {
 
 aquavoidSignIn.addEventListener('click', async () => {
   aquavoidSignIn.disabled = true;
-  setAquavoidStatus('Redirecting to Google for Aquavoid sign-in…');
+  setAquavoidStatus('Opening Google sign-in…');
   try {
     await aquavoidPersistenceReady;
-    // Use the same-tab redirect flow for both accounts. This avoids the
-    // popup.ts COOP/window.closed warnings and persists across future launches.
-    await signInWithRedirect(aquavoidAuth, aquavoidGoogleProvider);
+    await googleSignIn(aquavoidAuth, aquavoidGoogleProvider);
   } catch (error) {
     console.error('Aquavoid Google redirect sign-in failed:', error);
     const messages = {
