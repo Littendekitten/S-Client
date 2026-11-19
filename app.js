@@ -407,15 +407,12 @@ try {
 }
 const aquavoidFirebaseApp = getApps().find(app => app.name === '[DEFAULT]')
   || initializeApp(aquavoidFirebaseConfig);
-// Pin Aquavoid auth to localStorage only. The game iframe uses the same key;
-// if the two sides used different storages, the game would migrate the user
-// out of localStorage on load and sign the launcher out the moment Play is clicked.
-let aquavoidAuth;
-try {
-  aquavoidAuth = initializeAuth(aquavoidFirebaseApp, { persistence: browserLocalPersistence, popupRedirectResolver: browserPopupRedirectResolver });
-} catch (error) {
-  aquavoidAuth = getAuth(aquavoidFirebaseApp);
-}
+// Use Firebase's DEFAULT persistence (IndexedDB first, then localStorage). The game running in
+// the instance iframe calls plain getAuth() and therefore uses that same hierarchy. If this page
+// pinned the session to localStorage only, the game would find the user there, MOVE it to
+// IndexedDB and delete the localStorage copy, which signed the launcher out the moment Play was
+// clicked ("Connect your Aquavoid account" again). Sharing the default keeps one session for both.
+const aquavoidAuth = getAuth(aquavoidFirebaseApp);
 // Use the Aquavoid project's Firestore instance for player saves and leaderboard
 // reads/writes. This must be initialized separately from S-Client's Firestore.
 const aquavoidFirestore = getFirestore(aquavoidFirebaseApp);
