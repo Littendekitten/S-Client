@@ -4587,7 +4587,7 @@ async function importShaderFiles(files) {
 }
 // Both import entry points must open the same picker. The empty-state button is
 // especially important for first-time users whose library has no installed mods.
-const openModImportPicker = () => { if (!currentModInstanceId) { toast('Select or install an instance first. Mods are installed per instance.'); return; } $('modFileInput').click(); };
+const openModImportPicker = () => { if (window.__sclientModLoader !== 'mangomod') { toast('Switch this instance to MangoMod Loader to import mods.'); return; } if (!currentModInstanceId) { toast('Select or install an instance first. Mods are installed per instance.'); return; } $('modFileInput').click(); };
 $('importModButton')?.addEventListener('click', openModImportPicker);
 $('emptyImportButton')?.addEventListener('click', openModImportPicker);
 $('modFileInput').addEventListener('change', async event => {
@@ -4673,8 +4673,14 @@ window.SClientMods = {
         syncExternalGameMods();
         return name;
     },
-    async startInstance(instanceId, targetWindow, version) {
+    async startInstance(instanceId, targetWindow, version, loader = 'mangomod') {
         if (!instanceId || !targetWindow) return {ok:false, message:'The game frame is not ready.'};
+        if (loader !== 'mangomod') {
+            // Vanilla instance: never register the frame or send mods, so the game runs unmodified.
+            externalGameWindow = null; externalGameInstanceId = null; activeSessionMods = []; modSessionActive = false;
+            window.dispatchEvent(new CustomEvent('sclient:mods-synced', {detail:{instanceId:null, permissions:[]}}));
+            return {ok:true, modCount:0, vanilla:true};
+        }
         const normalizedVersion = version ? String(version) : null;
         const requestedLoadKey = `${instanceId}|${normalizedVersion || ''}`;
         // Register the frame BEFORE awaiting the (Firestore-backed) mod profile. The game posts
@@ -4701,6 +4707,27 @@ window.SClientMods = {
         });
         postExternalModState();
         return {ok:true, modCount:activeSessionMods.length};
+    },
+    // Removes a mod from one instance (Modrinth-style). Returns the removed mod's name.
+    async remove(instanceId, modId) {
+        if (!instanceId) throw new Error('Choose an instance first.');
+        const normalizedVersion = window.__sclientModVersion || null;
+        const key = `${instanceId}|${normalizedVersion || ''}`;
+        const loaded = currentModInstanceId !== instanceId || modInstanceLoadKey !== key
+            ? await applyModInstance(instanceId, normalizedVersion) : await modInstanceLoadPromise;
+        if (!loaded) throw new Error('Could not load this instance’s mod profile.');
+        const index = installedMods.findIndex(item => item.manifest.id === modId);
+        if (index < 0) throw new Error('That mod is not installed in this instance.');
+        const record = installedMods[index];
+        if (record.enabled) executeSclEvent(record, 'onDisable', {enabled:false, removed:true});
+        installedMods.splice(index, 1);
+        if (activeModId === modId) activeModId = null;
+        const ok = await saveMods();
+        renderInstalledMods();
+        refreshIslandEntry();
+        syncExternalGameMods();
+        if (ok === false) throw new Error('Could not save to your account.');
+        return record.manifest.name;
     },
     stopInstance() {
         if (externalGameWindow && modSessionActive) activeSessionMods.forEach(record => executeSclEvent(record, 'onGameUnload', {session:true}));

@@ -483,3 +483,9 @@ button:not(:disabled):active{transform:translateY(1px)}
 .startup-aquavoid-gate .aquavoid-signin-button{max-width:none;margin:0;}
 .startup-aquavoid-gate .auth-status{margin:12px 0 0;}
 .startup-aquavoid-gate .auth-retry-button{margin-top:10px;}
+
+.loader-chip{display:inline-block;padding:1px 7px;border-radius:10px;border:1px solid #3c6478;color:#a9c9d8;font:8px 'DM Mono',monospace;letter-spacing:.8px}
+.loader-chip.mangomod{background:#3a2a0c;border-color:#c98a1b;color:#ffc857}
+.loader-chip.vanilla{background:#112a3a}
+.loader-warning{margin:0 0 12px;padding:10px 12px;border:1px solid #c98a1b;border-radius:8px;background:#2a1f0a;color:#ffd98a;font:12px Manrope,sans-serif}
+.catalogue-action{display:flex;gap:8px;align-items:center}

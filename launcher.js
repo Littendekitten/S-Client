@@ -1,6 +1,9 @@
 // S-Client launcher layer: Modrinth-style Library (instances) + Mods download page.
 // S-Client supports the released Aquavoid 1.0 and 1.01 builds.
 const MAX_INSTANCES = 3;
+// Mod loaders, like Fabric on Modrinth: mods only run in instances that use MangoMod Loader.
+const LOADERS = { vanilla: 'Vanilla', mangomod: 'MangoMod Loader' };
+const loaderOf = inst => (inst && inst.loader === 'mangomod') ? 'mangomod' : 'vanilla';
 const SUPPORTED_VERSIONS = ['1.0', '1.01'];
 // Game versions are hosted in this repo's GitHub Pages root: /game-versions/Aquavoid-<version>/
 const versionFolder = v => `game-versions/Aquavoid-${v}/`;
@@ -148,7 +151,7 @@ async function mountInstance(inst) {
     try {
       const engine = await waitForModEngine();
       if (!engine) { toast('The mod engine did not finish loading, so mods were not applied. Reload the page and try again.'); return; }
-      const result = await engine.startInstance(inst.id, frame.contentWindow, inst.version);
+      const result = await engine.startInstance(inst.id, frame.contentWindow, inst.version, loaderOf(inst));
       if (result?.ok === false) toast(result.message || 'Mods could not be applied to this instance.');
     } catch (error) {
       console.error('Could not initialize this instance mod session:', error);
@@ -201,7 +204,8 @@ function setModInstance(id, notify = true) {
   const selected = instances.find(i => i.id === modInstanceId);
   window.__sclientModInstance = modInstanceId;
   window.__sclientModVersion = selected?.version || null;
-  if (notify) window.dispatchEvent(new CustomEvent('sclient:mod-instance', { detail: { id: modInstanceId, version: selected?.version || null } }));
+  window.__sclientModLoader = loaderOf(selected);
+  if (notify) window.dispatchEvent(new CustomEvent('sclient:mod-instance', { detail: { id: modInstanceId, version: selected?.version || null, loader: loaderOf(selected) } }));
   renderModBar();
 }
 function renderModBar() {
@@ -216,7 +220,11 @@ function renderModBar() {
   if (!instances.length) {
     bar.innerHTML = '<span class="mod-bar-label">MODS ARE PER INSTANCE</span><span class="mod-bar-hint">Install Aquavoid from Discover first, then add mods to that instance.</span>';
   } else {
-    bar.innerHTML = `<span class="mod-bar-label">MODS FOR INSTANCE</span><select id="modInstanceSelect" class="mod-bar-select">${instances.map(i => `<option value="${esc(i.id)}" ${i.id === modInstanceId ? 'selected' : ''}>${esc(i.name)} · ${esc(i.version)}</option>`).join('')}</select><span class="mod-bar-hint">Each instance has its own mod library, enabled mods and settings.</span>`;
+    const sel = instances.find(i => i.id === modInstanceId);
+    const loaderNote = loaderOf(sel) === 'mangomod'
+      ? 'MangoMod Loader is active: enabled mods run when you launch.'
+      : 'Vanilla instance: mods are off. Switch this instance to MangoMod Loader (LOADER button in your Library) to use mods.';
+    bar.innerHTML = `<span class="mod-bar-label">MODS FOR INSTANCE</span><select id="modInstanceSelect" class="mod-bar-select">${instances.map(i => `<option value="${esc(i.id)}" ${i.id === modInstanceId ? 'selected' : ''}>${esc(i.name)} · ${esc(i.version)}</option>`).join('')}</select><span class="loader-chip ${loaderOf(sel)}">${esc(LOADERS[loaderOf(sel)])}</span><span class="mod-bar-hint">${esc(loaderNote)}</span>`;
   }
   const imp = $('importModButton');
   if (imp) imp.disabled = !modInstanceId;
@@ -274,6 +282,7 @@ async function renderModCatalogue() {
     <div class="mod-instance-bar"><span class="mod-bar-label">INSTALL INTO</span>
       <select id="catalogueInstance" class="mod-bar-select">${instances.map(i => `<option value="${esc(i.id)}" ${i.id === selected ? 'selected' : ''}>${esc(i.name)} · ${esc(i.version)}</option>`).join('')}</select>
       <span class="mod-bar-hint">Manage installed mods from a Library card (MODS).</span></div>
+    ${loaderOf(instances.find(i => i.id === selected)) === 'mangomod' ? '' : '<p class="loader-warning">This is a Vanilla instance. Switch it to MangoMod Loader (LOADER button in your Library) to install and run mods.</p>'}
     <div class="catalogue-grid">${mods.map(m => {
       const done = have.includes(m.id);
       const installedVersion = installedVersionsByInstance[selected]?.[m.id] || '';
@@ -281,7 +290,8 @@ async function renderModCatalogue() {
       const compatibleVersions = Array.isArray(m.gameVersions) && m.gameVersions.length ? m.gameVersions.map(String) : (m.gameVersion ? [String(m.gameVersion)] : []);
       const compatible = !compatibleVersions.length || compatibleVersions.includes(String(instances.find(i => i.id === selected)?.version || ''));
       const versionsLabel = compatibleVersions.length ? compatibleVersions.join(' / ') : String(m.gameVersion || '?');
-      const actionLabel = !compatible ? `NOT FOR ${instances.find(i => i.id === selected)?.version || 'THIS VERSION'}` : updateAvailable ? '↻ UPDATE' : done ? '✓ INSTALLED' : '⬇ DOWNLOAD';
+      const loaderOk = loaderOf(instances.find(i => i.id === selected)) === 'mangomod';
+      const actionLabel = !loaderOk && !done ? 'NEEDS MANGOMOD' : !compatible ? `NOT FOR ${instances.find(i => i.id === selected)?.version || 'THIS VERSION'}` : updateAvailable ? '↻ UPDATE' : done ? '✓ INSTALLED' : '⬇ DOWNLOAD';
       return `<article class="catalogue-card" data-file="${esc(m.file)}">
         <div class="catalogue-icon">${esc(m.icon || '◇')}</div>
         <div class="catalogue-body">
@@ -290,12 +300,28 @@ async function renderModCatalogue() {
           <div class="project-tags"><span>Aquavoid ${esc(versionsLabel)}</span><span>v${esc(m.version || '1.0.0')}</span>${(m.tags || []).map(t => `<span>${esc(t)}</span>`).join('')}</div>
           <div class="instance-meta"><span>by ${esc(m.author || 'Unknown')}</span>${updateAvailable ? `<span>Installed v${esc(installedVersion)}</span>` : ''}</div>
         </div>
-        <div class="catalogue-action"><button class="primary-button" data-install="${esc(m.file)}" type="button" ${!compatible || (done && !updateAvailable) ? 'disabled' : ''}>${actionLabel}</button></div>
+        <div class="catalogue-action"><button class="primary-button" data-install="${esc(m.file)}" type="button" ${!compatible || !loaderOk || (done && !updateAvailable) ? 'disabled' : ''}>${actionLabel}</button>${done ? `<button class="soft-button danger" data-remove="${esc(m.id)}" type="button">REMOVE</button>` : ''}</div>
       </article>`;
     }).join('')}</div>`;
 }
+async function removeCatalogueMod(modId, button) {
+  const instanceId = $('modCatalogue').dataset.instance;
+  if (!window.SClientMods?.remove) { toast('The client is still loading. Try again in a moment.'); return; }
+  button.disabled = true;
+  try {
+    setModInstance(instanceId, false);
+    const name = await window.SClientMods.remove(instanceId, modId);
+    await refreshInstalledIds(instanceId);
+    toast(`${name} removed from ${instances.find(i => i.id === instanceId)?.name || 'your instance'}.${instanceId === activeInstanceId ? ' Relaunch the game to finish unloading it.' : ''}`);
+  } catch (err) {
+    console.error(err);
+    toast(`Could not remove: ${err.message}`);
+  }
+  renderModCatalogue();
+}
 async function installCatalogueMod(file, button) {
   const instanceId = $('modCatalogue').dataset.instance;
+  if (loaderOf(instances.find(i => i.id === instanceId)) !== 'mangomod') { toast('Switch this instance to MangoMod Loader to install mods.'); return; }
   if (!window.SClientMods?.install) { toast('The client is still loading. Try again in a moment.'); return; }
   button.disabled = true;
   button.textContent = 'DOWNLOADING…';
@@ -323,10 +349,21 @@ function sanitizeInstance(raw) {
     id: (String(raw.id || '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 100)) || ('inst_' + Math.random().toString(36).slice(2, 10)),
     name: String(raw.name || `Aquavoid ${version}`).replace(/\s+/g, ' ').trim().slice(0, 24) || `Aquavoid ${version}`,
     version,
+    // Instances saved before loaders existed keep their mods working (MangoMod Loader).
+    loader: raw.loader === 'vanilla' ? 'vanilla' : 'mangomod',
     createdAt: Number(raw.createdAt) || Date.now(),
     lastPlayed: Number(raw.lastPlayed) || 0,
     playSeconds: Math.max(0, Math.floor(Number(raw.playSeconds) || 0))
   };
+}
+
+async function toggleLoader(id) {
+  const inst = instances.find(i => i.id === id);
+  if (!inst) return;
+  inst.loader = loaderOf(inst) === 'mangomod' ? 'vanilla' : 'mangomod';
+  await persist();
+  toast(`${inst.name} now uses ${LOADERS[inst.loader]}.${inst.id === activeInstanceId ? ' Relaunch the game to apply it.' : ''}`);
+  renderLibrary();
 }
 
 function persist() {
@@ -374,13 +411,14 @@ function renderLibraryGrid() {
       <div class="instance-icon">A</div>
       <div class="instance-body">
         <h3>${esc(inst.name)}</h3>
-        <div class="instance-meta"><span>Aquavoid ${esc(inst.version)}</span><span>${esc(fmtTime(inst.playSeconds))}</span></div>
+        <div class="instance-meta"><span>Aquavoid ${esc(inst.version)}</span><span class="loader-chip ${loaderOf(inst)}">${esc(LOADERS[loaderOf(inst)])}</span><span>${esc(fmtTime(inst.playSeconds))}</span></div>
         <div class="instance-meta"><span>Installed ${esc(fmtDate(inst.createdAt))}</span>${inst.lastPlayed ? `<span>Last played ${esc(fmtDate(inst.lastPlayed))}</span>` : ''}</div>
       </div>
       <div class="instance-actions">
         <button class="primary-button" data-act="play" type="button">${inst.id === activeInstanceId ? '▶ RESUME' : '▶ PLAY'}</button>
         ${inst.id === activeInstanceId ? '<button class="soft-button" data-act="stop" type="button">■ STOP</button>' : ''}
         <button class="soft-button" data-act="mods" type="button">MODS</button>
+        <button class="soft-button" data-act="loader" type="button">LOADER</button>
         <button class="soft-button" data-act="rename" type="button">RENAME</button>
         <button class="soft-button danger" data-act="delete" type="button">DELETE</button>
       </div>
@@ -564,6 +602,7 @@ async function runInstall() {
   if (instances.length >= MAX_INSTANCES) { toast(`Instance limit reached (${MAX_INSTANCES}/${MAX_INSTANCES}).`); return; }
   const version = String($('instanceVersionSelect')?.value || '1.0');
   if (!SUPPORTED_VERSIONS.includes(version)) { toast('Choose a supported Aquavoid version.'); return; }
+  const loader = $('instanceLoaderSelect')?.value === 'mangomod' ? 'mangomod' : 'vanilla';
   const name = $('instanceNameInput').value.replace(/\s+/g, ' ').trim().slice(0, 24);
   if (name.length < 2) { toast('Give your instance a name (2–24 characters).'); return; }
   installing = true;
@@ -595,7 +634,7 @@ async function runInstall() {
   } else if (instances.length >= MAX_INSTANCES) {
     toast('Instance limit reached.');
   } else {
-    instances.push({ id, name, version, createdAt: Date.now(), lastPlayed: 0, playSeconds: 0 });
+    instances.push({ id, name, version, loader, createdAt: Date.now(), lastPlayed: 0, playSeconds: 0 });
     await persist();
     toast(`Installed ${name}. Find it in your Library.`);
     goto('library');
@@ -636,6 +675,7 @@ function wireEvents() {
     if (btn.dataset.act === 'play') launch(id);
     else if (btn.dataset.act === 'stop') { closeActiveInstance(); toast('Instance stopped.'); }
     else if (btn.dataset.act === 'mods') { setModInstance(id); goto('instancemods'); }
+    else if (btn.dataset.act === 'loader') toggleLoader(id);
     else if (btn.dataset.act === 'rename') renameInstance(id);
     else if (btn.dataset.act === 'delete') deleteInstance(id);
   });
@@ -643,6 +683,8 @@ function wireEvents() {
   $('modCatalogue').addEventListener('click', e => {
     const b = e.target.closest('button[data-install]');
     if (b) installCatalogueMod(b.dataset.install, b);
+    const r = e.target.closest('[data-remove]');
+    if (r) removeCatalogueMod(r.dataset.remove, r);
   });
   $('modCatalogue').addEventListener('change', e => {
     if (e.target.id === 'catalogueInstance') { $('modCatalogue').dataset.instance = e.target.value; renderModCatalogue(); }
