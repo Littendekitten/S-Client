@@ -118,6 +118,19 @@ function installBetterESCOnFrame(frame, instanceId) {
   if (frame.contentDocument?.readyState === 'complete') attach();
 }
 
+// app.js (the mod engine) finishes loading on its own schedule: it waits on Firebase and the
+// Three.js CDN. Wait for it instead of silently launching the game with no mods applied.
+function waitForModEngine(timeoutMs = 20000) {
+  if (window.SClientMods?.startInstance) return Promise.resolve(window.SClientMods);
+  return new Promise(resolve => {
+    const started = Date.now();
+    const timer = setInterval(() => {
+      if (window.SClientMods?.startInstance) { clearInterval(timer); resolve(window.SClientMods); }
+      else if (Date.now() - started > timeoutMs) { clearInterval(timer); resolve(null); }
+    }, 100);
+  });
+}
+
 async function mountInstance(inst) {
   clearFrame();
 
@@ -133,7 +146,9 @@ async function mountInstance(inst) {
   installBetterESCOnFrame(frame, inst.id);
   frame.addEventListener('load', async () => {
     try {
-      const result = await window.SClientMods?.startInstance?.(inst.id, frame.contentWindow, inst.version);
+      const engine = await waitForModEngine();
+      if (!engine) { toast('The mod engine did not finish loading, so mods were not applied. Reload the page and try again.'); return; }
+      const result = await engine.startInstance(inst.id, frame.contentWindow, inst.version);
       if (result?.ok === false) toast(result.message || 'Mods could not be applied to this instance.');
     } catch (error) {
       console.error('Could not initialize this instance mod session:', error);
@@ -281,7 +296,7 @@ async function renderModCatalogue() {
 }
 async function installCatalogueMod(file, button) {
   const instanceId = $('modCatalogue').dataset.instance;
-  if (!window.SClientMods) { toast('The client is still loading. Try again in a moment.'); return; }
+  if (!window.SClientMods?.install) { toast('The client is still loading. Try again in a moment.'); return; }
   button.disabled = true;
   button.textContent = 'DOWNLOADING…';
   try {
@@ -290,9 +305,9 @@ async function installCatalogueMod(file, button) {
     const raw = await res.json();
     setModInstance(instanceId, false);
     const instance = instances.find(item => item.id === instanceId);
-    const name = await window.SClientMods.install(instanceId, raw, instance?.version);
+    const name = await window.SClientMods.install(instanceId, raw, instance?.version, { enable: true });
     await refreshInstalledIds(instanceId);
-    toast(`${name} installed to ${instances.find(i => i.id === instanceId)?.name || 'your instance'}.`);
+    toast(`${name} installed and enabled for ${instances.find(i => i.id === instanceId)?.name || 'your instance'}. Launch (or relaunch) the game to use it.`);
   } catch (err) {
     console.error(err);
     toast(`Could not install: ${err.message}`);

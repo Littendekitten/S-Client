@@ -4006,7 +4006,7 @@ function normalizeShaderPack(raw) {
 }
 function allShaderPacks() { return [...BUILTIN_SHADERS, ...customShaderPacks]; }
 function saveShaders() {
-    const data = {activePackId, customPacks:customShaderPacks};
+    const data = {activePackId:activeShaderId, customPacks:customShaderPacks};
     const size = new Blob([JSON.stringify(data)]).size;
     if (size > 650000) { toast('Your shader library is too large for one cloud save. Remove a large custom pack.'); return Promise.resolve(false); }
     return window.SClientCloud.saveShaders(data).catch(error => { console.error('Shader cloud save failed:', error); toast('Could not sync shader packs to Firestore.'); return false; });
@@ -4651,7 +4651,7 @@ function applyModInstance(instanceId, version = window.__sclientModVersion || nu
 }
 window.SClientMods = {
     // Validates a downloaded mod against the target instance's exact game version.
-    async install(instanceId, raw, version = null) {
+    async install(instanceId, raw, version = null, options = {}) {
         if (!instanceId) throw new Error('Choose an instance first.');
         const normalizedVersion = version ? String(version) : null;
         const requestedLoadKey = `${instanceId}|${normalizedVersion || ''}`;
@@ -4660,7 +4660,13 @@ window.SClientMods = {
             : await modInstanceLoadPromise;
         if (!loaded) throw new Error(currentModInstanceId !== instanceId ? 'The selected instance changed during the install. Please try again.' : 'Could not load this instance’s mod profile. Check your connection and try again.');
         const targetVersion = normalizedVersion || currentModInstanceVersion;
+        const wasInstalled = installedMods.some(item => item.manifest.id === String(raw?.id || '').trim());
         const name = upsertManifest(raw, targetVersion);
+        if (options.enable && !wasInstalled) {
+            // A mod downloaded from the catalogue starts enabled, so it works the first time the game launches.
+            const fresh = installedMods.find(item => item.manifest.id === String(raw?.id || '').trim());
+            if (fresh && !fresh.incompatible && !fresh.enabled) { fresh.enabled = true; executeSclEvent(fresh, 'onEnable', {enabled:true}); }
+        }
         const ok = await saveMods();
         renderInstalledMods();
         if (ok === false) throw new Error('Could not save to your account.');
