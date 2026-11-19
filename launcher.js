@@ -86,7 +86,7 @@ async function ensureInstanceCache() {
           clearTimeout(timeout);
           resolve();
         };
-        const timeout = setTimeout(finish, 1800);
+        const timeout = setTimeout(finish, 4000);
         navigator.serviceWorker.addEventListener('controllerchange', finish, { once: true });
         // Close the narrow race where the first controllerchange happened
         // between the initial check and listener registration.
@@ -202,6 +202,7 @@ async function mountInstance(inst) {
     });
     cacheReady = await ensureInstanceCache();
   }
+  if (!cacheReady) toast('Local instance cache is unavailable in this browser; running the hosted game files instead.');
 
   const gameUrl = cacheReady
     ? new URL(`instance-cache/${encodeURIComponent(inst.id)}/index.html`, document.baseURI)
@@ -294,6 +295,14 @@ function renderModBar() {
 let modIndexPromise = null;
 const installedIdsByInstance = {};
 const installedVersionsByInstance = {};
+function compareVersions(a, b) {
+  const pa = String(a || '0').split('.').map(n => parseInt(n, 10) || 0), pb = String(b || '0').split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0);
+    if (d) return d < 0 ? -1 : 1;
+  }
+  return 0;
+}
 function loadModIndex() {
   if (!modIndexPromise) modIndexPromise = fetch('mods/index.json', { cache: 'no-cache' }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }).then(d => Array.isArray(d.mods) ? d.mods : []);
   return modIndexPromise;
@@ -337,7 +346,7 @@ async function renderModCatalogue() {
     <div class="catalogue-grid">${mods.map(m => {
       const done = have.includes(m.id);
       const installedVersion = installedVersionsByInstance[selected]?.[m.id] || '';
-      const updateAvailable = done && !!installedVersion && installedVersion !== String(m.version || '');
+      const updateAvailable = done && !!installedVersion && compareVersions(installedVersion, m.version) < 0;
       const compatibleVersions = Array.isArray(m.gameVersions) && m.gameVersions.length ? m.gameVersions.map(String) : (m.gameVersion ? [String(m.gameVersion)] : []);
       const compatible = !compatibleVersions.length || compatibleVersions.includes(String(instances.find(i => i.id === selected)?.version || ''));
       const versionsLabel = compatibleVersions.length ? compatibleVersions.join(' / ') : String(m.gameVersion || '?');
@@ -379,7 +388,8 @@ function sanitizeInstance(raw) {
   const version = SUPPORTED_VERSIONS.includes(String(raw?.version)) ? String(raw.version) : null;
   if (!version) return null;
   return {
-    id: String(raw.id || ('inst_' + Math.random().toString(36).slice(2, 10))),
+    // The local file server only accepts [a-zA-Z0-9_-]{1,100}; normalise anything else.
+    id: (String(raw.id || '').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 100)) || ('inst_' + Math.random().toString(36).slice(2, 10)),
     name: String(raw.name || `Aquavoid ${version}`).replace(/\s+/g, ' ').trim().slice(0, 24) || `Aquavoid ${version}`,
     version,
     createdAt: Number(raw.createdAt) || Date.now(),
@@ -426,7 +436,7 @@ function renderCounts() {
   btn.disabled = installing || full;
 }
 
-function renderLibrary() {
+function renderLibraryGrid() {
   const grid = $('instanceGrid');
   const cards = instances.map(inst => `
     <article class="instance-card ${inst.id === activeInstanceId ? 'is-running' : ''}" data-id="${esc(inst.id)}">
@@ -449,6 +459,10 @@ function renderLibrary() {
   }
   grid.innerHTML = cards.join('');
   renderCounts();
+}
+
+function renderLibrary() {
+  renderLibraryGrid();
   if (modInstanceId && !instances.some(i => i.id === modInstanceId)) setModInstance(instances[0]?.id || null);
   else if (modInstanceId && instances.some(i => i.id === modInstanceId)) setModInstance(modInstanceId, false);
   else if (!modInstanceId && instances.length) setModInstance(activeInstanceId || instances[0].id);
@@ -483,14 +497,42 @@ function updatePlayHeader() {
   }
 }
 
+// A cloud write started from pagehide often never finishes, so a local backup of the
+// play time is kept until the cloud write succeeds and is merged back on the next start.
+const PLAYTIME_BACKUP_KEY = 'sclient.playtimeBackup';
+function backupPlaytime(inst, extraSeconds = 0) {
+  try {
+    localStorage.setItem(PLAYTIME_BACKUP_KEY, JSON.stringify({ id: inst.id, playSeconds: inst.playSeconds + extraSeconds, lastPlayed: Date.now() }));
+  } catch (_) { /* storage unavailable */ }
+}
+function clearPlaytimeBackup(id) {
+  try {
+    const b = JSON.parse(localStorage.getItem(PLAYTIME_BACKUP_KEY) || 'null');
+    if (b && b.id === id) localStorage.removeItem(PLAYTIME_BACKUP_KEY);
+  } catch (_) {}
+}
+function restorePlaytimeBackup() {
+  try {
+    const b = JSON.parse(localStorage.getItem(PLAYTIME_BACKUP_KEY) || 'null');
+    if (!b) return;
+    const inst = instances.find(i => i.id === b.id);
+    if (inst && Number(b.playSeconds) > inst.playSeconds) {
+      inst.playSeconds = Math.floor(Number(b.playSeconds));
+      inst.lastPlayed = Math.max(inst.lastPlayed, Number(b.lastPlayed) || 0);
+      Promise.resolve(persist()).then(() => clearPlaytimeBackup(inst.id)).catch(() => {});
+    } else localStorage.removeItem(PLAYTIME_BACKUP_KEY);
+  } catch (_) {}
+}
 function flushPlaytime() {
   const inst = instances.find(i => i.id === activeInstanceId);
   if (inst && unsavedSeconds > 0) {
     inst.playSeconds += unsavedSeconds;
     inst.lastPlayed = Date.now();
     unsavedSeconds = 0;
-    persist();
-    renderLibrary();
+    backupPlaytime(inst);
+    Promise.resolve(persist()).then(() => clearPlaytimeBackup(inst.id)).catch(() => {});
+    // Only the instance grid shows play time; do not rebuild the mod catalogue (and re-read Firestore) each minute.
+    renderLibraryGrid();
   }
 }
 
@@ -511,7 +553,17 @@ async function launch(id) {
   if (activeInstanceId && activeInstanceId !== id) flushPlaytime();
   if (activeInstanceId !== id) {
     try { await mountInstance(inst); }
-    catch (err) { console.error(err); toast('Could not load this instance. Check your connection and try again.'); return; }
+    catch (err) {
+      console.error(err);
+      // mountInstance() already tore down the previous frame, so do not keep reporting it as running.
+      activeInstanceId = null;
+      unsavedSeconds = 0;
+      clearFrame();
+      updatePlayHeader();
+      renderLibrary();
+      toast('Could not load this instance. Check your connection and try again.');
+      return;
+    }
     activeInstanceId = id;
     unsavedSeconds = 0;
     inst.lastPlayed = Date.now();
@@ -712,6 +764,8 @@ function wireEvents() {
     const playing = activeInstanceId && $('view-play').classList.contains('view-active') && !document.hidden;
     if (playing) {
       unsavedSeconds += dt;
+      const running = instances.find(i => i.id === activeInstanceId);
+      if (running) backupPlaytime(running, unsavedSeconds);
       if (unsavedSeconds >= 60) flushPlaytime();
     }
   }, 5000);
@@ -732,6 +786,7 @@ function init() {
   } catch (error) {
     console.info('Could not restore a pending Aquavoid launch.', error);
   }
+  restorePlaytimeBackup();
   wireEvents();
   updatePlayHeader();
   renderLibrary();

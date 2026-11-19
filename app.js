@@ -418,6 +418,8 @@ let aquavoidCloudReady = false;
 let aquavoidAuthRevision = 0;
 let aquavoidSaveQueue = Promise.resolve();
 let aquavoidWriteError = null;
+// Limits mirror the game content tables; loadClientGame() refreshes them from SKINS/WEAPONS/LEVELS.
+let aquavoidSaveLimits = { skins: 6, weapons: 5, levels: 5 };
 window.AQUAVOID_BOOT = { authenticated: false, gameSave: null, uid: null, cloudReady: false };
 // The legacy parent-page renderer is hidden while the launcher iframe is
 // active. Authentication and instance launch do not depend on its startup.
@@ -446,12 +448,12 @@ window.AquavoidCloud = {
     const uidAtStart = aquavoidUser.uid;
     const safeData = {
       coins: Math.max(0, Math.floor(Number(data.coins) || 0)),
-      owned: Array.isArray(data.owned) ? data.owned.filter(n => Number.isInteger(n) && n >= 0 && n < 6) : [0],
-      sel: Math.max(0, Math.min(5, Math.floor(Number(data.sel) || 0))),
-      unlocked: Math.max(0, Math.min(4, Math.floor(Number(data.unlocked) || 0))),
+      owned: Array.isArray(data.owned) ? data.owned.filter(n => Number.isInteger(n) && n >= 0 && n < aquavoidSaveLimits.skins) : [0],
+      sel: Math.max(0, Math.min(aquavoidSaveLimits.skins - 1, Math.floor(Number(data.sel) || 0))),
+      unlocked: Math.max(0, Math.min(aquavoidSaveLimits.levels - 1, Math.floor(Number(data.unlocked) || 0))),
       bestWave: Math.max(0, Math.floor(Number(data.bestWave) || 0)),
-      wown: Array.isArray(data.wown) ? data.wown.filter(n => Number.isInteger(n) && n >= 0 && n < 5) : [0],
-      wsel: Math.max(0, Math.min(4, Math.floor(Number(data.wsel) || 0))),
+      wown: Array.isArray(data.wown) ? data.wown.filter(n => Number.isInteger(n) && n >= 0 && n < aquavoidSaveLimits.weapons) : [0],
+      wsel: Math.max(0, Math.min(aquavoidSaveLimits.weapons - 1, Math.floor(Number(data.wsel) || 0))),
       bestScore: Math.max(0, Math.floor(Number(data.bestScore) || 0)),
       name: String(data.name || 'Captain').replace(/[^\p{L}\p{N} _.\-]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 16) || 'Captain',
       nameSet: data.nameSet === true,
@@ -493,15 +495,35 @@ window.AquavoidCloud = {
       throw error;
     }
   },
+  // Name-only update: touches nothing but the captain name so a stale parent-page
+  // copy of the save can never overwrite progress made inside the game iframe.
+  async saveCaptainName(rawName) {
+    if (!aquavoidUser) throw new Error('Connect your Aquavoid account before saving a captain name.');
+    if (!aquavoidCloudReady) throw new Error('Your Aquavoid account is connected, but cloud saving is offline. Use RETRY CLOUD SAVE first.');
+    const name = String(rawName || 'Captain').replace(/[^\p{L}\p{N} _.\-]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 16) || 'Captain';
+    await setDoc(doc(aquavoidFirestore, 'players', aquavoidUser.uid), { name, nameSet: true, updatedAt: serverTimestamp() }, { merge: true });
+    try {
+      const entry = doc(aquavoidFirestore, 'leaderboard', aquavoidUser.uid);
+      const snap = await getDoc(entry);
+      if (snap.exists()) await setDoc(entry, { name, updatedAt: serverTimestamp() }, { merge: true });
+    } catch (error) { console.warn('Leaderboard name update failed:', error); throw Object.assign(new Error('leaderboard'), { leaderboard: true, cause: error }); }
+    return name;
+  },
   async saveLeaderboardEntry(data) {
     if (!aquavoidUser) throw new Error('Connect your Aquavoid account before posting a leaderboard score.');
     if (!aquavoidCloudReady) throw new Error('Your Aquavoid account is connected, but cloud saving is offline. Retry the cloud connection first.');
     const bestWave = Math.max(0, Math.floor(Number(data?.bestWave) || 0));
     if (bestWave < 1) return false;
     const name = String(data?.name || 'Captain').replace(/[^\p{L}\p{N} _.\-]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 16) || 'Captain';
+    // Never lower an existing score with a stale copy of the save.
+    let existingBest = 0;
+    try {
+      const existing = await getDoc(doc(aquavoidFirestore, 'leaderboard', aquavoidUser.uid));
+      existingBest = existing.exists() ? Math.max(0, Math.floor(Number(existing.data()?.bestWave) || 0)) : 0;
+    } catch (error) { console.warn('Could not read the existing leaderboard entry:', error); }
     await setDoc(doc(aquavoidFirestore, 'leaderboard', aquavoidUser.uid), {
       name,
-      bestWave,
+      bestWave: Math.max(bestWave, existingBest),
       level: Math.max(1, Math.floor(Number(data?.level) || 1)),
       updatedAt: serverTimestamp()
     }, { merge: true });
@@ -705,6 +727,8 @@ let modSessionActive = false;
 let modSessionLoadPromise = null;
 let modInstanceLoadPromise = Promise.resolve(true);
 let modInstanceLoadKey = null;
+let installedModsReady = false; // true only after this instance's mods were read successfully
+let preservedModEntries = [];   // stored entries this client cannot interpret; kept so a save never drops them
 function toast(message) {
     if (!toastRegion) return;
     const node = document.createElement('div');
@@ -729,6 +753,11 @@ if (!threeReady || !window.THREE) {
     loadingCover.className = 'renderer-error';
     loadingCover.textContent = 'Aquavoid could not load its 3D renderer. Check your connection to the Three.js CDN and reload this page.';
     console.error('S-Client: Three.js did not load.');
+    window.SClientMods = window.SClientMods || {
+        async install() { throw new Error('The mod engine is unavailable because Three.js or WebGL failed to start. Reload the page.'); },
+        async startInstance() { return {ok:false, message:'The mod engine is unavailable (Three.js or WebGL failed to start). Mods were not applied.'}; },
+        stopInstance() {}
+    };
     return;
 }
 const $stage = $('gameStage');
@@ -740,6 +769,11 @@ try {
     loadingCover.className = 'renderer-error';
     loadingCover.textContent = 'Aquavoid needs WebGL. Enable hardware acceleration in Chrome, then reload S-Client.';
     console.error('S-Client WebGL initialization failed:', error);
+    window.SClientMods = window.SClientMods || {
+        async install() { throw new Error('The mod engine is unavailable because Three.js or WebGL failed to start. Reload the page.'); },
+        async startInstance() { return {ok:false, message:'The mod engine is unavailable (Three.js or WebGL failed to start). Mods were not applied.'}; },
+        stopInstance() {}
+    };
     return;
 }
 R.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -1400,7 +1434,7 @@ function worldRuntimeOpenMerchant(node){
         const button=document.createElement('button');button.type='button';button.className='worldRuntime-ware';
         const owned=worldRuntimeSave.gear[`${node.id}:${ware.id}`]===true;
         button.disabled=(owned&&ware.kind!=='resource')||coins<ware.price;
-        button.innerHTML=`<span class="worldRuntime-ware-icon">${ware.icon}</span><span class="worldRuntime-ware-copy"><strong>${escapeHTML(ware.name)}</strong><small>${escapeHTML(ware.description||ware.kind)}</small></span><b>${owned&&ware.kind!=='resource'?'OWNED':`${ware.price} COINS`}</b>`;
+        button.innerHTML=`<span class="worldRuntime-ware-icon">${escapeHTML(ware.icon)}</span><span class="worldRuntime-ware-copy"><strong>${escapeHTML(ware.name)}</strong><small>${escapeHTML(ware.description||ware.kind)}</small></span><b>${owned&&ware.kind!=='resource'?'OWNED':`${ware.price} COINS`}</b>`;
         button.addEventListener('click',()=>worldRuntimePurchaseWare(node,ware));
         $('worldRuntimeMerchantWares').appendChild(button);
     });
@@ -2881,6 +2915,9 @@ $('wpb').onclick = () => {
 $('wback').onclick = () => showOnly('card');
 $('lback').onclick = () => showOnly('card');
 function frame(now) {
+    // The parent-page scene lives in a hidden container (the instance iframe is the real game).
+    // Do not render it; just poll cheaply in case it is ever shown again.
+    if (!$stage.offsetParent) { last = now; window.setTimeout(() => requestAnimationFrame(frame), 500); return; }
     const dt = Math.min((now - last) / 1000, .05);
     last = now;
     tidalAmplitudeBoost = modFlag('tidalEngine');
@@ -3222,6 +3259,9 @@ function saveAquavoidGame() {
     // has failed. The save is enabled only after the existing cloud document
     // was loaded successfully (or confirmed not to exist).
     if (!window.AQUAVOID_BOOT?.cloudReady) return Promise.resolve(false);
+    // The parent page renders no playable game any more; its copy of the save is stale
+    // as soon as the instance iframe saves. Writing it would overwrite real progress.
+    if (externalGameWindow || !$('gameStage')?.offsetParent) return Promise.resolve(false);
     if(worldSessionActive){worldRuntimeSave.health=worldRuntimePlayerHealth;worldRuntimeSave.ship={x:P.position.x,z:P.position.z,heading:worldRuntimeShipHeading};}
     const data = {
         coins,
@@ -3254,6 +3294,7 @@ function saveAquavoidGame() {
     });
 }
 function loadClientGame(raw = window.AQUAVOID_BOOT?.gameSave) {
+    aquavoidSaveLimits = { skins: SKINS.length, weapons: WEAPONS.length, levels: LEVELS.length };
     coins = Math.max(0, Number(raw?.coins) || 0);
     owned = Array.isArray(raw?.owned) && raw.owned.length
         ? raw.owned.filter(i => Number.isInteger(i) && i >= 0 && i < SKINS.length)
@@ -3324,12 +3365,13 @@ function saveCaptainName() {
     nameSet = true;
     $('nameInput').value = playerName;
     $('nameNote').textContent = 'Saving your captain name…';
-    Promise.resolve(save()).then(() => {
-        $('nameNote').textContent = bestWave > 0
-            ? (aquavoidLeaderboardError ? 'Name saved, but leaderboard sync failed. Check the Aquavoid Firestore rules.' : 'Name saved. Your leaderboard entry has been updated.')
-            : 'Name saved. Finish an Endless run to appear on the leaderboard.';
-    }).catch(() => {
-        $('nameNote').textContent = 'Name is set for this session, but cloud save failed.';
+    // Only the name fields are written. The full game save belongs to the game iframe.
+    Promise.resolve(window.AquavoidCloud?.saveCaptainName?.(playerName)).then(() => {
+        $('nameNote').textContent = 'Name saved. It appears in the game the next time you launch an instance.';
+    }).catch(error => {
+        $('nameNote').textContent = error?.leaderboard
+            ? 'Name saved, but the leaderboard entry could not be updated. Check the Aquavoid Firestore rules.'
+            : 'Name is set for this session, but cloud save failed.';
     });
 }
 function renderLeaderboardRows(entries) {
@@ -3530,7 +3572,8 @@ function saveMods() {
         state: { ...(record.state || {}) }
     }));
     if (!currentModInstanceId) return Promise.resolve(false);
-    return window.SClientCloud.saveInstanceMods(currentModInstanceId, { installed: snapshot }).catch(error => {
+    if (!installedModsReady) { toast('This instance\'s mods are still loading. Try again in a moment.'); return Promise.resolve(false); }
+    return window.SClientCloud.saveInstanceMods(currentModInstanceId, { installed: [...snapshot, ...preservedModEntries] }).catch(error => {
         console.error('S-Client mod sync failed:', error);
         toast('Could not sync your mods to Firestore. Check your connection.');
         return false;
@@ -4476,6 +4519,8 @@ async function unzipSupportedFiles(file) {
 }
 async function importModFiles(files) {
     if (!currentModInstanceId) { toast('Select or install an instance first. Mods are installed per instance.'); return; }
+    await modInstanceLoadPromise;
+    if (!installedModsReady) { toast('This instance\'s mods could not be loaded yet. Check your connection and try again.'); return; }
     let modCount = 0, shaderCount = 0, errors = [];
     for (const file of files) {
         try {
@@ -4541,13 +4586,16 @@ function applyModInstance(instanceId, version = window.__sclientModVersion || nu
     modInstanceLoadKey = loadKey;
     activeModId = null;
     installedMods.length = 0;
+    installedModsReady = false;
+    preservedModEntries = [];
 
     modInstanceLoadPromise = (async () => {
         if (instanceId) {
             try {
                 const stored = await window.SClientCloud.loadInstanceMods(instanceId);
                 if (token !== modInstanceLoadToken) return false;
-                stored.filter(item => item && item.manifest && item.manifest.format === 'sclient-mod').forEach(item => {
+                preservedModEntries = stored.filter(item => !(item && item.manifest && item.manifest.format === 'sclient-mod'));
+                stored.filter(item => item && item.manifest && item.manifest.format === 'sclient-mod' && !installedMods.some(existing => existing.manifest.id === item.manifest.id)).forEach(item => {
                     const declared = readGameVersions(item.manifest);
                     const compatible = declared.some(v => SUPPORTED_GAME_VERSIONS.includes(v)) && (!currentModInstanceVersion || declared.includes(currentModInstanceVersion));
                     const record = {...item, featureStates:item.featureStates || {}, settings:item.settings || {}, state:item.state || {}};
@@ -4568,6 +4616,7 @@ function applyModInstance(instanceId, version = window.__sclientModVersion || nu
             }
         }
         if (token !== modInstanceLoadToken) return false;
+        installedModsReady = true;
         renderModLibrary();
         // Re-selecting the instance that is actively running refreshes its live
         // profile. Selecting a different instance does not affect the game.
@@ -4585,7 +4634,7 @@ window.SClientMods = {
         const loaded = currentModInstanceId !== instanceId || currentModInstanceVersion !== normalizedVersion || modInstanceLoadKey !== requestedLoadKey
             ? await applyModInstance(instanceId, normalizedVersion)
             : await modInstanceLoadPromise;
-        if (!loaded) throw new Error('Could not load this instance’s mod profile. Check your connection and try again.');
+        if (!loaded) throw new Error(currentModInstanceId !== instanceId ? 'The selected instance changed during the install. Please try again.' : 'Could not load this instance’s mod profile. Check your connection and try again.');
         const targetVersion = normalizedVersion || currentModInstanceVersion;
         const name = upsertManifest(raw, targetVersion);
         const ok = await saveMods();
@@ -4602,7 +4651,7 @@ window.SClientMods = {
             ? await applyModInstance(instanceId, normalizedVersion)
             : await modInstanceLoadPromise;
         if (!loaded) return {ok:false, message:'The instance mod profile could not be loaded. Check your connection and try again.'};
-        if (externalGameWindow && externalGameWindow !== targetWindow && modSessionActive) {
+        if (externalGameWindow && modSessionActive) {
             activeSessionMods.forEach(record => executeSclEvent(record, 'onGameUnload', {session:true}));
         }
         externalGameWindow = targetWindow;
