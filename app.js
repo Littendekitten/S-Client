@@ -3540,6 +3540,12 @@ function externalModPayload() {
 function postExternalModState() {
     if (!externalGameWindow) return;
     try {
+        window.dispatchEvent(new CustomEvent('sclient:mods-synced', {detail:{
+            instanceId:externalGameInstanceId,
+            permissions:[...new Set(activeSessionMods.filter(record => record.enabled).flatMap(record => record.manifest?.permissions || []))]
+        }}));
+    } catch (error) { console.warn('Could not announce the mod state:', error); }
+    try {
         externalGameWindow.postMessage({
             type:'sclient:mods:update',
             instanceId:externalGameInstanceId,
@@ -4665,15 +4671,21 @@ window.SClientMods = {
         if (!instanceId || !targetWindow) return {ok:false, message:'The game frame is not ready.'};
         const normalizedVersion = version ? String(version) : null;
         const requestedLoadKey = `${instanceId}|${normalizedVersion || ''}`;
-        const loaded = currentModInstanceId !== instanceId || currentModInstanceVersion !== normalizedVersion || modInstanceLoadKey !== requestedLoadKey
-            ? await applyModInstance(instanceId, normalizedVersion)
-            : await modInstanceLoadPromise;
-        if (!loaded) return {ok:false, message:'The instance mod profile could not be loaded. Check your connection and try again.'};
-        if (externalGameWindow && modSessionActive) {
+        // Register the frame BEFORE awaiting the (Firestore-backed) mod profile. The game posts
+        // 'sclient:mods:ready' as soon as its script runs; if that arrives while we are still
+        // awaiting, the message handler must already recognise the frame or the mods are never sent.
+        if (externalGameWindow && externalGameWindow !== targetWindow && modSessionActive) {
             activeSessionMods.forEach(record => executeSclEvent(record, 'onGameUnload', {session:true}));
+            activeSessionMods = [];
+            modSessionActive = false;
         }
         externalGameWindow = targetWindow;
         externalGameInstanceId = instanceId;
+        const loaded = currentModInstanceId !== instanceId || currentModInstanceVersion !== normalizedVersion || modInstanceLoadKey !== requestedLoadKey
+            ? await applyModInstance(instanceId, normalizedVersion)
+            : await modInstanceLoadPromise;
+        if (externalGameWindow !== targetWindow) return {ok:false, message:'The game frame was replaced.'};
+        if (!loaded) return {ok:false, message:'The instance mod profile could not be loaded. Check your connection and try again.'};
         activeSessionMods = cloneEnabledModRecords();
         modSessionActive = true;
         // onEnable belongs to the enabled-state transition; launching a game
@@ -4690,6 +4702,7 @@ window.SClientMods = {
         externalGameInstanceId = null;
         activeSessionMods = [];
         modSessionActive = false;
+        window.dispatchEvent(new CustomEvent('sclient:mods-synced', {detail:{instanceId:null, permissions:[]}}));
     }
 };
 window.addEventListener('sclient:mod-instance', event => applyModInstance(event.detail?.id || null, event.detail?.version || null));

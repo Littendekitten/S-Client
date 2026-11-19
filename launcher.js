@@ -76,24 +76,18 @@ function clearFrame() {
   frameUrls.forEach(u => URL.revokeObjectURL(u));
   frameUrls = [];
 }
-async function instanceHasBetterESC(inst) {
-  try {
-    const records = await window.SClientCloud?.loadInstanceMods?.(inst.id);
-    if (!Array.isArray(records)) return false;
-    return records.some(record => {
-      const manifest = record?.manifest;
-      const versions = Array.isArray(manifest?.gameVersions) ? manifest.gameVersions.map(String) : [String(manifest?.gameVersion || '')];
-      return record?.enabled === true
-        && manifest?.permissions?.includes('input.cursorUnlock')
-        && (!versions.filter(Boolean).length || versions.includes(String(inst.version)));
-    });
-  } catch (error) {
-    console.warn('BetterESC could not read this instance mod profile:', error);
-    return false;
-  }
-}
+// BetterESC follows the live mod state (sent by the mod engine whenever mods are
+// enabled, disabled or the game starts) instead of a one-off read at launch, so toggling the
+// mod while the game is open works and a slow/failed Firestore read can't silently disable it.
+let betterEscActive = false;
+let betterEscInstanceId = null;
+window.addEventListener('sclient:mods-synced', event => {
+  const detail = event.detail || {};
+  betterEscInstanceId = detail.instanceId || null;
+  betterEscActive = Array.isArray(detail.permissions) && detail.permissions.includes('input.cursorUnlock');
+});
 
-function installBetterESCOnFrame(frame) {
+function installBetterESCOnFrame(frame, instanceId) {
   const attach = () => {
     try {
       const gameDocument = frame.contentDocument;
@@ -106,6 +100,7 @@ function installBetterESCOnFrame(frame) {
         if (gameDocument.pointerLockElement) pointerWasLocked = true;
       }, true);
       gameDocument.addEventListener('keydown', event => {
+        if (!betterEscActive || betterEscInstanceId !== instanceId) return;
         if (event.code !== 'Escape' || (!gameDocument.pointerLockElement && !pointerWasLocked)) return;
         pointerWasLocked = false;
         event.preventDefault();
@@ -131,12 +126,11 @@ async function mountInstance(inst) {
   const gameUrl = new URL(versionFolder(inst.version) + 'index.html', document.baseURI);
   gameUrl.searchParams.set('sclientInstance', inst.id);
   gameUrl.searchParams.set('sclientVersion', inst.version);
-  const betterESCEnabled = await instanceHasBetterESC(inst);
 
   const frame = document.createElement('iframe');
   frame.title = inst.name;
   frame.allow = 'fullscreen; autoplay; clipboard-write';
-  if (betterESCEnabled) installBetterESCOnFrame(frame);
+  installBetterESCOnFrame(frame, inst.id);
   frame.addEventListener('load', async () => {
     try {
       const result = await window.SClientMods?.startInstance?.(inst.id, frame.contentWindow, inst.version);
