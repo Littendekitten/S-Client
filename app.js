@@ -3606,7 +3606,7 @@ function saveMods() {
 // SCL (S-Client Language) is a small, declarative, event-driven language with bounded conditional flow.
 // It is interpreted by this client; uploaded files never run JavaScript or eval().
 const SCL_VERSION = 1;
-const SCL_PERMISSIONS = new Set(['ui.toast','rendering.shaderPacks','eyesight.presets','aquavoid.features','aquavoid.actions','aquavoid.worlds','vehicles.shipSkins','input.cursorUnlock']);
+const SCL_PERMISSIONS = new Set(['ui.toast','rendering.shaderPacks','eyesight.presets','aquavoid.features','aquavoid.actions','aquavoid.worlds','vehicles.shipSkins','input.cursorUnlock','combat.stompImmunity','vehicles.sailFix']);
 const SCL_APIS = new Set(['ui.toast','rendering.selectShaderPack','rendering.resetShaderPack','aquavoid.action']);
 const SCL_EVENTS = ['onInstall','onEnable','onDisable','onSettingChange','onFeatureChange','onGameLoad','onGameUnload','onWorldEnter'];
 const SCL_CONTROL_TYPES = new Set(['text','button','toggle','select','slider','shaderPicker']);
@@ -4450,6 +4450,8 @@ function renderModPage(record) {
             'rendering.shaderPacks':'Manage shader packs through the generic WebGL renderer',
             'vehicles.shipSkins':'Contribute data-driven vehicle skins',
             'input.cursorUnlock':'Unlock the game cursor with Escape',
+            'combat.stompImmunity':'Stop enemies hurting you while you are above them',
+            'vehicles.sailFix':'Turn every boat model sail to billow toward the bow',
             'aquavoid.worlds':'Add game modes and tagged world content',
             'aquavoid.features':'Toggle built-in Aquavoid feature hooks',
             'aquavoid.actions':'Run existing allowlisted Aquavoid actions',

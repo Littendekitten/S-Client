@@ -140,6 +140,7 @@ function waitForModEngine(timeoutMs = 20000) {
 // in memory, and writes that copy into the instance frame:
 //   * ship skins supplied by mods show up in the Ship Shop for free and are never auto-equipped
 //   * the KitaCat logo sits on the front of the sail instead of behind it
+//   * FightingPatches / BoatPatches hooks (enemy contact check, stock boat sails)
 function patchGameSource(source) {
   let js = String(source).replace(/\r\n/g, '\n');
   const replaceOnce = (from, to) => {
@@ -168,10 +169,23 @@ function patchGameSource(source) {
         selectVehicleSkin(key) {
             selectedModSkin = String(key || '');
             try { localStorage.setItem('aquavoid-mod-skin', selectedModSkin); } catch (e) {}
+        },
+        hasPermission(permission) {
+            return mods.some(mod => Array.isArray(mod.permissions) && mod.permissions.includes(permission));
         }`);
   replaceOnce('    let mods = [];\n    return Object.freeze({',
     "    let mods = [];\n    let selectedModSkin = '';\n    try { selectedModSkin = localStorage.getItem('aquavoid-mod-skin') || ''; } catch (e) {}\n    return Object.freeze({");
   replaceOnce('badge.position.set(0,2.18,-.31)', 'badge.position.set(0,2.18,-.47)');
+  // FightingPatches (combat.stompImmunity): an enemy only hurts on touch when the boat is not
+  // above it. "Above" = the boat has been lifted clear of the monster's body and fin.
+  const contactRe = /d\s*<\s*m\.T\.r\s*\+\s*1\.3\s*&&\s*hurtT\s*<=\s*0/;
+  if (!contactRe.test(js)) throw new Error('game patch anchor not found: enemy contact check');
+  js = js.replace(contactRe, match => match + ' && !(AquavoidMods.hasPermission(\'combat.stompImmunity\') && p.y - o.position.y > m.T.sc * 1.2 + .6)');
+  // BoatPatches (vehicles.sailFix): stock sails are curved toward the stern; turn them so they
+  // billow toward the bow (-Z) like the sail on the mod ships. The z-tilt is negated so the lean stays.
+  const shapeRe = /SHAPES\[SHAPE_OF\[i\]\s*\|\|\s*SHAPE_OF\[0\]\]\(\);/;
+  if (!shapeRe.test(js)) throw new Error('game patch anchor not found: ship shape builder');
+  js = js.replace(shapeRe, match => match + ' if (AquavoidMods.hasPermission(\'vehicles.sailFix\')) P.children.forEach(m => { if (m.isMesh && m.material === cloth && m.geometry.type === \'PlaneGeometry\') { m.rotation.y = Math.PI; m.rotation.z = -m.rotation.z; } });');
   const applyModsRe = /applyMods:\s*\(\)\s*=>\s*applySclientVehicleSkin\(\)/;
   if (!applyModsRe.test(js)) throw new Error('game patch anchor not found: applyMods');
   js = js.replace(applyModsRe, 'applyMods: () => { applySclientVehicleSkin(); drawShop(); }');
