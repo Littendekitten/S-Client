@@ -1,5 +1,5 @@
 import { initializeApp, getApps } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
-import { getAuth, GoogleAuthProvider, signInWithRedirect, initializeAuth, browserPopupRedirectResolver, getRedirectResult, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, browserSessionPersistence } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
+import { getAuth, GoogleAuthProvider, signInWithRedirect, signInWithPopup, initializeAuth, browserPopupRedirectResolver, getRedirectResult, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, browserSessionPersistence } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import { getFirestore, doc, getDoc, setDoc, deleteDoc, serverTimestamp, collection, query, where, orderBy, limit, getDocs } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 const firebaseConfig = {
@@ -45,17 +45,36 @@ let cloudHasSaved = false;
 // Redirect auth avoids that cross-window handshake entirely. The pending
 // instance ID is held in sessionStorage by launcher.js and resumes on return.
 async function googleSignIn(auth, provider) {
-  await signInWithRedirect(auth, provider);
+  // Redirect sign-in loses its result in Chrome/Safari/Firefox when the app (aquavoid.partybag.com)
+  // and the Firebase auth domain (*.firebaseapp.com) are different sites: the browser partitions
+  // storage between them, so getRedirectResult() finds nothing and you land back on the login
+  // screen with no error. A popup returns the result by postMessage and is unaffected, so use it
+  // first and only fall back to a redirect when popups are unavailable or blocked.
+  try {
+    await signInWithPopup(auth, provider);
+  } catch (error) {
+    const fallbackCodes = ['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment'];
+    if (fallbackCodes.includes(error?.code)) {
+      await signInWithRedirect(auth, provider);
+      return;
+    }
+    if (error?.code === 'auth/popup-closed-by-user' || error?.code === 'auth/cancelled-popup-request') {
+      const cancelled = new Error('Sign-in was cancelled. Click the button to try again.');
+      cancelled.code = error.code;
+      throw cancelled;
+    }
+    throw error;
+  }
 }
 
 // Registered immediately so the button works while the rest of startup is still loading.
 signInButton.addEventListener('click', async () => {
   signInButton.disabled = true;
-  showAuthMessage('Redirecting to Google securely…');
+  showAuthMessage('Opening Google sign-in…');
   const rescueTimer = window.setTimeout(() => {
     signInButton.disabled = false;
-    showAuthMessage('Google sign-in did not redirect. Check your connection and try again.', true);
-  }, 15000);
+    showAuthMessage('Google sign-in is taking unusually long. Finish it in the Google window, or try again.', true);
+  }, 180000);
   try {
     await googleSignIn(firebaseAuth, googleProvider);
   } catch (error) {
@@ -64,7 +83,8 @@ signInButton.addEventListener('click', async () => {
       'auth/unauthorized-domain': 'Add this exact S-Client website hostname to Authorized domains in the S-Client Firebase project.',
       'auth/operation-not-allowed': 'Enable the Google provider in S-Client Firebase Authentication.',
       'auth/invalid-api-key': 'The S-Client Firebase API key is invalid or restricted.',
-      'auth/network-request-failed': 'Network error while contacting Google/Firebase. Check your connection and try again.'
+      'auth/network-request-failed': 'Network error while contacting Google/Firebase. Check your connection and try again.',
+      'auth/popup-closed-by-user': 'Sign-in was cancelled. Click the button to try again.'
     };
     showAuthMessage(messages[error?.code] || `Google sign-in failed (${error?.code || 'unknown error'}): ${error.message}`, true);
   } finally {
@@ -312,6 +332,7 @@ async function tryBootstrap(user) {
 // Resolve a pending Google redirect sign-in on page return.
 try {
   const redirectResult = await Promise.race([getRedirectResult(firebaseAuth), new Promise(resolve => setTimeout(resolve, 4000))]);
+  if (redirectResult?.user) console.info('S-Client redirect sign-in completed for:', redirectResult.user.uid);
 } catch (error) {
   console.error('S-Client Google redirect result failed:', error);
   const messages = {
@@ -545,11 +566,11 @@ window.AquavoidCloud = {
 
 aquavoidSignIn.addEventListener('click', async () => {
   aquavoidSignIn.disabled = true;
-  setAquavoidStatus('Redirecting to Google securely…');
+  setAquavoidStatus('Opening Google sign-in…');
   const rescueTimer = window.setTimeout(() => {
     aquavoidSignIn.disabled = false;
-    setAquavoidStatus('Google sign-in did not redirect. Check your connection and try again.', true);
-  }, 15000);
+    setAquavoidStatus('Google sign-in is taking unusually long. Finish it in the Google window, or try again.', true);
+  }, 180000);
   try {
     await googleSignIn(aquavoidAuth, aquavoidGoogleProvider);
   } catch (error) {
