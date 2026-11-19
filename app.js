@@ -101,130 +101,173 @@ function makeCloudWriter(reference, label) {
   };
 }
 
+function paintSClientProfile(publicName, showProfilePhoto, user) {
+  const photo = document.getElementById('profilePhoto');
+  const avatar = document.getElementById('profileAvatar');
+  const name = document.getElementById('profileName');
+  if (name) {
+    name.textContent = publicName;
+    name.title = publicName;
+  }
+  if (showProfilePhoto && user.photoURL && photo && avatar) {
+    photo.src = user.photoURL;
+    photo.hidden = false;
+    avatar.hidden = true;
+  } else if (avatar && photo) {
+    avatar.textContent = publicName.trim().charAt(0).toUpperCase() || 'S';
+    photo.hidden = true;
+    avatar.hidden = false;
+  }
+}
+
+function createEmptySClientBoot() {
+  return {
+    clientPrefs: {},
+    mods: [],
+    shaders: { customPacks: [], activePackId: '' }
+  };
+}
+
+// Authentication is the login gate. Firestore is only an optional data service:
+// an unavailable profile must never prevent the client from opening.
 async function bootstrapSignedInUser(user) {
-  showAuthMessage('Loading your S-Client cloud profile…');
-  retryButton.hidden = true;
-  signInButton.disabled = true;
+  signedInUid = user.uid;
   const profileRef = doc(firestore, 'users', user.uid);
   const clientPrefsRef = doc(firestore, 'users', user.uid, 'client', 'preferences');
   const modsRef = doc(firestore, 'users', user.uid, 'client', 'mods');
   const shadersRef = doc(firestore, 'users', user.uid, 'client', 'shaders');
-  try {
-    const [profileSnapshot, modsSnapshot, shadersSnapshot, clientPrefsSnapshot] = await Promise.all([
-      getDoc(profileRef), getDoc(modsRef), getDoc(shadersRef), getDoc(clientPrefsRef)
-    ]);
-    const now = serverTimestamp();
-    const previousProfile = profileSnapshot.exists() ? (profileSnapshot.data() || {}) : {};
-    const publicName = String(previousProfile.publicName || 'S-Client Player').replace(/\s+/g, ' ').trim().slice(0, 24) || 'S-Client Player';
-    const showProfilePhoto = previousProfile.showProfilePhoto === true;
-    const profile = {
-      uid: user.uid,
-      // Keep provider identity in the private UID-owned profile only.
-      authDisplayName: user.displayName || '',
-      email: user.email || '',
-      photoURL: user.photoURL || '',
-      publicName,
-      showProfilePhoto,
-      lastLoginAt: now
-    };
-    if (!profileSnapshot.exists()) profile.createdAt = now;
-    await setDoc(profileRef, profile, { merge: true });
 
-    const photo = document.getElementById('profilePhoto');
-    const avatar = document.getElementById('profileAvatar');
-    document.getElementById('profileName').textContent = publicName;
-    document.getElementById('profileName').title = publicName;
-    if (showProfilePhoto && user.photoURL) {
-      photo.src = user.photoURL;
-      photo.hidden = false;
-      avatar.hidden = true;
-    } else {
-      avatar.textContent = publicName.trim().charAt(0).toUpperCase() || 'S';
-      photo.hidden = true;
-      avatar.hidden = false;
-    }
+  // Publish usable defaults and the cloud API immediately. The launcher can now
+  // initialize even if Firestore is denied, offline, or slow.
+  window.SCLIENT_BOOT = createEmptySClientBoot();
+  const cloudApi = {
+    user: { uid: user.uid },
+    profile: {
+      publicName: String(user.displayName || 'S-Client Player').replace(/\s+/g, ' ').trim().slice(0, 24) || 'S-Client Player',
+      showProfilePhoto: false,
+      photoURL: user.photoURL || ''
+    },
+    saveProfile: makeCloudWriter(profileRef, 'profile'),
+    saveClientPrefs: makeCloudWriter(clientPrefsRef, 'client preferences'),
+    saveMods: makeCloudWriter(modsRef, 'mods'),
+    saveShaders: makeCloudWriter(shadersRef, 'shaders'),
+    loadInstanceMods: async instanceId => {
+      const snap = await getDoc(doc(firestore, 'users', user.uid, 'client', 'mods-' + instanceId));
+      const data = snap.exists() ? (snap.data() || {}) : {};
+      return Array.isArray(data.installed) ? data.installed : [];
+    },
+    saveInstanceMods: (() => {
+      const writers = {};
+      return (instanceId, data) => (writers[instanceId] ||= makeCloudWriter(doc(firestore, 'users', user.uid, 'client', 'mods-' + instanceId), 'instance mods'))(data);
+    })(),
+    deleteInstanceMods: instanceId => deleteDoc(doc(firestore, 'users', user.uid, 'client', 'mods-' + instanceId))
+  };
+  window.SClientCloud = cloudApi;
+  paintSClientProfile(cloudApi.profile.publicName, false, user);
 
-    const modsDocument = modsSnapshot.exists() ? (modsSnapshot.data() || {}) : {};
-    // Read the canonical installed[] array, and recover the numeric-key format
-    // written by earlier S-Client builds before migrating it to the canonical shape.
-    const restoredMods = Array.isArray(modsDocument.installed)
-      ? modsDocument.installed
-      : Object.keys(modsDocument)
-          .filter(key => /^\d+$/.test(key))
-          .sort((a, b) => Number(a) - Number(b))
-          .map(key => modsDocument[key])
-          .filter(Boolean);
-    const needsModsMigration = !Array.isArray(modsDocument.installed) && restoredMods.length > 0;
+  // Reveal step 2 immediately. No profile read or write is awaited here.
+  clientShell.style.display = 'none';
+  authGate.hidden = false;
+  sclientAuthStep.hidden = true;
+  authGate.setAttribute('aria-labelledby', 'aquavoidAuthTitle');
+  document.getElementById('aquavoidAuthGate').hidden = false;
+  showAuthMessage('S-Client authenticated. Your cloud profile is loading separately.');
+  updateCloudStatus();
+  retryButton.hidden = false;
+  signInButton.disabled = false;
 
-    const shaderDocument = shadersSnapshot.exists() ? (shadersSnapshot.data() || {}) : {};
-    window.SCLIENT_BOOT = {
-      clientPrefs: clientPrefsSnapshot.exists() ? (clientPrefsSnapshot.data() || {}) : {},
-      mods: restoredMods,
-      shaders: { customPacks: Array.isArray(shaderDocument.customPacks) ? shaderDocument.customPacks : [], activePackId: String(shaderDocument.activePackId || '') }
-    };
-    window.SClientCloud = {
-      user: { uid: user.uid },
-      profile: { publicName, showProfilePhoto, photoURL: user.photoURL || '' },
-      saveProfile: makeCloudWriter(profileRef, 'profile'),
-      saveClientPrefs: makeCloudWriter(clientPrefsRef, 'client preferences'),
-      saveMods: makeCloudWriter(modsRef, 'mods'),
-      saveShaders: makeCloudWriter(shadersRef, 'shaders'),
-      // Mods are stored per instance: users/{uid}/client/mods-<instanceId>
-      loadInstanceMods: async instanceId => {
-        const snap = await getDoc(doc(firestore, 'users', user.uid, 'client', 'mods-' + instanceId));
-        const data = snap.exists() ? (snap.data() || {}) : {};
-        return Array.isArray(data.installed) ? data.installed : [];
-      },
-      saveInstanceMods: (() => {
-        const writers = {};
-        return (instanceId, data) => (writers[instanceId] ||= makeCloudWriter(doc(firestore, 'users', user.uid, 'client', 'mods-' + instanceId), 'instance mods'))(data);
-      })(),
-      deleteInstanceMods: instanceId => deleteDoc(doc(firestore, 'users', user.uid, 'client', 'mods-' + instanceId))
-    };
-    if (needsModsMigration) {
-      await setDoc(modsRef, { installed: restoredMods, updatedAt: serverTimestamp() });
-    }
-    signedInUid = user.uid;
-    // S-Client account alone does not unlock the launcher. Keep the startup
-    // gate open and require the separate Aquavoid account as step two.
-    clientShell.style.display = 'none';
-    authGate.hidden = false;
-    sclientAuthStep.hidden = true;
-    authGate.setAttribute('aria-labelledby', 'aquavoidAuthTitle');
-    document.getElementById('aquavoidAuthGate').hidden = false;
-    showAuthMessage('S-Client connected. Complete the Aquavoid account sign-in to open the launcher.');
-    updateCloudStatus();
-    return true;
-  } catch (error) {
-    console.error('S-Client account bootstrap failed:', error);
-    signInButton.disabled = false;
-    const code = String(error?.code || '');
-    const isRejectedAuthSession = [
-      'auth/invalid-user-token',
-      'auth/user-token-expired',
-      'auth/invalid-refresh-token'
-    ].includes(code);
+  let resolveBootReady;
+  window.SCLIENT_BOOT_READY = new Promise(resolve => { resolveBootReady = resolve; });
+  const hydratePromise = (async () => {
+    let timeoutId;
+    try {
+      const reads = Promise.all([
+        getDoc(profileRef), getDoc(modsRef), getDoc(shadersRef), getDoc(clientPrefsRef)
+      ]);
+      const [profileSnapshot, modsSnapshot, shadersSnapshot, clientPrefsSnapshot] = await Promise.race([
+        reads,
+        new Promise((_, reject) => {
+          timeoutId = window.setTimeout(() => {
+            const error = new Error('S-Client Firestore profile loading timed out.');
+            error.code = 'sclient/cloud-timeout';
+            reject(error);
+          }, 7000);
+        })
+      ]);
+      window.clearTimeout(timeoutId);
 
-    if (isRejectedAuthSession) {
-      // Firebase rejected the persisted refresh token. Clear this app's local
-      // Auth session so the next attempt starts a new Google OAuth sign-in.
-      // This does not delete the user's cloud profile or any game save.
-      try { await signOut(firebaseAuth); }
-      catch (signOutError) { console.warn('Could not clear the rejected S-Client Auth session:', signOutError); }
-      retryButton.hidden = true;
-      showAuthMessage(`Firebase rejected the saved S-Client login (${code}). Please sign in with Google again. Your cloud profile and saved data are not deleted.`, true);
+      const previousProfile = profileSnapshot.exists() ? (profileSnapshot.data() || {}) : {};
+      const publicName = String(previousProfile.publicName || cloudApi.profile.publicName).replace(/\s+/g, ' ').trim().slice(0, 24) || 'S-Client Player';
+      const showProfilePhoto = previousProfile.showProfilePhoto === true;
+      cloudApi.profile = { publicName, showProfilePhoto, photoURL: user.photoURL || '' };
+      paintSClientProfile(publicName, showProfilePhoto, user);
+
+      const modsDocument = modsSnapshot.exists() ? (modsSnapshot.data() || {}) : {};
+      const restoredMods = Array.isArray(modsDocument.installed)
+        ? modsDocument.installed
+        : Object.keys(modsDocument)
+            .filter(key => /^\d+$/.test(key))
+            .sort((a, b) => Number(a) - Number(b))
+            .map(key => modsDocument[key])
+            .filter(Boolean);
+      const needsModsMigration = !Array.isArray(modsDocument.installed) && restoredMods.length > 0;
+      const shaderDocument = shadersSnapshot.exists() ? (shadersSnapshot.data() || {}) : {};
+      window.SCLIENT_BOOT = {
+        clientPrefs: clientPrefsSnapshot.exists() ? (clientPrefsSnapshot.data() || {}) : {},
+        mods: restoredMods,
+        shaders: {
+          customPacks: Array.isArray(shaderDocument.customPacks) ? shaderDocument.customPacks : [],
+          activePackId: String(shaderDocument.activePackId || '')
+        }
+      };
+
+      // Profile bookkeeping/migration writes are best-effort and cannot block login.
+      const now = serverTimestamp();
+      const profile = {
+        uid: user.uid,
+        authDisplayName: user.displayName || '',
+        email: user.email || '',
+        photoURL: user.photoURL || '',
+        publicName,
+        showProfilePhoto,
+        lastLoginAt: now
+      };
+      if (!profileSnapshot.exists()) profile.createdAt = now;
+      setDoc(profileRef, profile, { merge: true }).catch(error => {
+        console.warn('S-Client profile bookkeeping could not be saved:', error);
+        cloudWriteError = error;
+        updateCloudStatus();
+      });
+      if (needsModsMigration) {
+        setDoc(modsRef, { installed: restoredMods, updatedAt: serverTimestamp() }).catch(error => {
+          console.warn('S-Client mod migration could not be saved:', error);
+        });
+      }
+      showAuthMessage('S-Client authenticated. Cloud profile connected.');
+      cloudWriteError = null;
+      updateCloudStatus();
+      window.dispatchEvent(new CustomEvent('sclient:cloud-boot-loaded'));
+      return true;
+    } catch (error) {
+      if (timeoutId) window.clearTimeout(timeoutId);
+      console.warn('S-Client cloud profile is unavailable; continuing with local defaults:', error);
+      const code = String(error?.code || 'connection-error');
+      const detail = code === 'permission-denied'
+        ? 'S-Client is signed in, but Firestore denied cloud profile access. The client will continue without cloud data.'
+        : `S-Client is signed in. Cloud profile is unavailable (${code}); the client will continue without cloud data.`;
+      showAuthMessage(detail, true);
+      window.dispatchEvent(new CustomEvent('sclient:cloud-boot-failed', { detail: { code, message: error?.message || '' } }));
       return false;
+    } finally {
+      resolveBootReady(true);
     }
-
-    retryButton.hidden = false;
-    const detail = code === 'permission-denied'
-      ? 'Firestore denied access. Check the S-Client owner-only Firestore rules.'
-      : code === 'auth/invalid-api-key'
-        ? 'Firebase rejected the S-Client API key. Check the Web API key in the kitacat-s-client Firebase project.'
-        : `Could not load your S-Client account (${code || 'connection error'}): ${error?.message || 'Check your connection and Firebase configuration.'}`;
-    showAuthMessage(detail, true);
-    return false;
-  }
+  })();
+  // Prevent an unexpected implementation error from becoming an unhandled rejection.
+  hydratePromise.catch(error => {
+    console.error('Unexpected S-Client cloud hydration error:', error);
+    resolveBootReady(true);
+  });
+  return true;
 }
 
 try {
@@ -244,11 +287,25 @@ async function tryBootstrap(user) {
   if (!user || bootstrapInProgress || signedInUid === user.uid) return;
   bootstrapInProgress = true;
   pendingUser = user;
-  const ok = await bootstrapSignedInUser(user);
-  bootstrapInProgress = false;
-  if (ok && !authReadyResolved) {
-    authReadyResolved = true;
-    resolveAuthReady();
+  try {
+    await bootstrapSignedInUser(user);
+  } catch (error) {
+    // Even an unexpected profile/bootstrap error must not strand module startup.
+    console.error('S-Client post-auth initialization failed; opening with defaults:', error);
+    signedInUid = user.uid;
+    window.SCLIENT_BOOT ||= createEmptySClientBoot();
+    window.SClientCloud ||= { user: { uid: user.uid }, profile: { publicName: user.displayName || 'S-Client Player', showProfilePhoto: false, photoURL: user.photoURL || '' } };
+    clientShell.style.display = 'none';
+    authGate.hidden = false;
+    sclientAuthStep.hidden = true;
+    document.getElementById('aquavoidAuthGate').hidden = false;
+  } finally {
+    bootstrapInProgress = false;
+    // The S-Client Firebase Auth observer is the only requirement for step 1.
+    if (!authReadyResolved) {
+      authReadyResolved = true;
+      resolveAuthReady();
+    }
   }
 }
 
@@ -267,7 +324,12 @@ try {
   showAuthMessage(messages[error?.code] || `Google sign-in failed (${error?.code || 'unknown error'}): ${error?.message || 'Check the Firebase error details.'}`, true);
 }
 
-retryButton.addEventListener('click', () => tryBootstrap(firebaseAuth.currentUser || pendingUser));
+retryButton.addEventListener('click', () => {
+  const user = firebaseAuth.currentUser || pendingUser;
+  if (!user) return;
+  signedInUid = null; // Explicit retry may re-run cloud hydration for the same account.
+  void tryBootstrap(user);
+});
 document.getElementById('signOutButton').addEventListener('click', async () => {
   const button = document.getElementById('signOutButton');
   button.disabled = true;
@@ -619,6 +681,14 @@ getRedirectResult(aquavoidAuth).then(result => {
     setAquavoidStatus(`Aquavoid sign-in did not complete (${error?.code || 'unknown error'}): ${error.message}. Please try connecting once more.`, true);
   }
 });
+
+// Let the optional cloud profile hydrate before the settings/mod UI snapshots
+// window.SCLIENT_BOOT. This wait is bounded; authentication and step-2 controls
+// are already live, so it cannot prevent either login from completing.
+await Promise.race([
+  Promise.resolve(window.SCLIENT_BOOT_READY || true).catch(() => false),
+  new Promise(resolve => window.setTimeout(() => resolve(false), 7500))
+]);
 
 (async () => {
 'use strict';

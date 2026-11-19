@@ -4,7 +4,7 @@ const MAX_INSTANCES = 3;
 const SUPPORTED_VERSIONS = ['1.0', '1.01'];
 // Game versions are hosted in this repo's GitHub Pages root: /game-versions/Aquavoid-<version>/
 const VERSION_FILES = ['index.html', 'app.js', 'style.css'];
-const INSTANCE_CACHE_REVISION = 'sclient-auth-redirect-2026-11-18-r3';
+const INSTANCE_CACHE_REVISION = 'sclient-auth-firestore-decoupled-2026-11-19-r1';
 const versionFolder = v => `game-versions/Aquavoid-${v}/`;
 const $ = id => document.getElementById(id);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -744,7 +744,17 @@ function init() {
   }
 }
 
-// Wait for the cloud profile to finish loading (app.js populates SClientCloud after sign-in).
+// Start as soon as Firebase Auth is valid and the minimal client/cloud API exists.
+// Wait briefly for profile hydration so existing instances/settings are restored,
+// but never let a Firestore outage keep the launcher from initializing.
+let launcherInitStarted = false;
 const wait = setInterval(() => {
-  if (window.SClientCloud && window.SCLIENT_BOOT) { clearInterval(wait); init(); }
-}, 250);
+  if (launcherInitStarted || !window.SClientCloud || !window.SCLIENT_BOOT) return;
+  launcherInitStarted = true;
+  clearInterval(wait);
+  const hydration = window.SCLIENT_BOOT_READY || Promise.resolve(true);
+  Promise.race([
+    Promise.resolve(hydration).catch(() => false),
+    new Promise(resolve => window.setTimeout(() => resolve(false), 7500))
+  ]).finally(() => init());
+}, 150);
