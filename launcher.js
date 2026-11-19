@@ -94,7 +94,7 @@ function installBetterESCOnFrame(frame, instanceId) {
   const attach = () => {
     try {
       const gameDocument = frame.contentDocument;
-      if (!gameDocument || gameDocument.__betterEscInstalled) return;
+      if (!gameDocument || gameDocument.__betterEscInstalled || !isGameDocument(frame)) return;
       gameDocument.__betterEscInstalled = true;
       // Keep track of the most recent pointer-lock state because Chromium may
       // dispatch pointerlockchange before the Escape keydown reaches the page.
@@ -134,6 +134,113 @@ function waitForModEngine(timeoutMs = 20000) {
   });
 }
 
+// ---- In-memory game patch --------------------------------------------------------------
+// The game files in game-versions/ are never edited. When an instance starts, the launcher
+// reads the game's own index.html and app.js, applies the small patches below to the copy
+// in memory, and writes that copy into the instance frame:
+//   * ship skins supplied by mods show up in the Ship Shop for free and are never auto-equipped
+//   * the KitaCat logo sits on the front of the sail instead of behind it
+function patchGameSource(source) {
+  let js = String(source).replace(/\r\n/g, '\n');
+  const replaceOnce = (from, to) => {
+    if (js.split(from).length !== 2) throw new Error('game patch anchor not found: ' + from.slice(0, 50));
+    js = js.replace(from, () => to);
+  };
+  replaceOnce(`        getVehicleSkin() {
+            for (const mod of mods) {
+                if (!mod.permissions?.includes('vehicles.shipSkins')) continue;
+                const skin = mod.vehicleSkins?.[0];
+                if (skin) return skin;
+            }
+            return null;
+        }`, `        getVehicleSkins() {
+            const list = [];
+            for (const mod of mods) {
+                if (!mod.permissions?.includes('vehicles.shipSkins')) continue;
+                for (const skin of (mod.vehicleSkins || [])) list.push({...skin, modId:mod.id, modName:mod.name || mod.id, key:mod.id + ':' + skin.id});
+            }
+            return list;
+        },
+        getVehicleSkin() {
+            return selectedModSkin ? (this.getVehicleSkins().find(skin => skin.key === selectedModSkin) || null) : null;
+        },
+        getSelectedKey() { return selectedModSkin; },
+        selectVehicleSkin(key) {
+            selectedModSkin = String(key || '');
+            try { localStorage.setItem('aquavoid-mod-skin', selectedModSkin); } catch (e) {}
+        }`);
+  replaceOnce('    let mods = [];\n    return Object.freeze({',
+    "    let mods = [];\n    let selectedModSkin = '';\n    try { selectedModSkin = localStorage.getItem('aquavoid-mod-skin') || ''; } catch (e) {}\n    return Object.freeze({");
+  replaceOnce('badge.position.set(0,2.18,-.31)', 'badge.position.set(0,2.18,-.47)');
+  const applyModsRe = /applyMods:\s*\(\)\s*=>\s*applySclientVehicleSkin\(\)/;
+  if (!applyModsRe.test(js)) throw new Error('game patch anchor not found: applyMods');
+  js = js.replace(applyModsRe, 'applyMods: () => { applySclientVehicleSkin(); drawShop(); }');
+  const shopHelper = `
+function appendModSkinButtons(g) {
+  AquavoidMods.getVehicleSkins().forEach(skin => {
+    const b = document.createElement('button');
+    const on = AquavoidMods.getSelectedKey() === skin.key;
+    b.className = 'sk' + (on ? ' on' : '');
+    b.innerHTML = '<i style="background:' + skin.hullColor + '"></i><i style="background:' + skin.sailColor + '"></i><span></span><small></small>';
+    b.querySelector('span').textContent = skin.name;
+    b.querySelector('small').textContent = on ? 'Equipped' : 'Free · MOD';
+    b.onclick = () => { AquavoidMods.selectVehicleSkin(skin.key); applySkin(sel); $('note').textContent = skin.name + ' equipped.'; drawShop(); };
+    g.appendChild(b);
+  });
+}
+`;
+  if (js.includes('            drawShop();\n        };\n\n        g.appendChild(b);\n    });\n}\n')) {          // Aquavoid 1.0
+    replaceOnce('            drawShop();\n        };\n\n        g.appendChild(b);\n    });\n}\n', '            drawShop();\n        };\n\n        g.appendChild(b);\n    });\n    appendModSkinButtons(g);\n}\n' + shopHelper);
+    replaceOnce('        b.onclick = () => {\n            applySkin(i);\n\n            if (own) {', "        b.onclick = () => {\n            if (own || coins >= s.p) AquavoidMods.selectVehicleSkin('');\n            applySkin(i);\n\n            if (own) {");
+  } else {                                                                                                    // Aquavoid 1.01
+    replaceOnce('showCoins();drawShop()};g.appendChild(b)})}', 'showCoins();drawShop()};g.appendChild(b)});appendModSkinButtons(g)}' + shopHelper);
+    replaceOnce('b.onclick=()=>{applySkin(i);if(own){', "b.onclick=()=>{if(own||coins>=s.p)AquavoidMods.selectVehicleSkin('');applySkin(i);if(own){");
+  }
+  return js;
+}
+
+const isGameDocument = frame => {
+  try {
+    const doc = frame.contentDocument;
+    return frame.dataset.fallback === '1' || !!doc?.documentElement?.hasAttribute('data-sclient-patched');
+  } catch (error) { return false; }
+};
+
+// Loads the (patched) game into the frame while keeping its real URL, so the shared Firebase
+// login, the ?sclientInstance query and the mod messages work exactly as before.
+async function loadGameIntoFrame(frame, gameUrl, version) {
+  let scriptUrl = null;
+  try {
+    const [htmlRes, jsRes] = await Promise.all([
+      fetch(gameUrl.pathname, { cache: 'no-cache' }),
+      fetch(new URL('app.js', gameUrl).pathname, { cache: 'no-cache' })
+    ]);
+    if (!htmlRes.ok || !jsRes.ok) throw new Error('game files unavailable');
+    const html = (await htmlRes.text()).replace(/\r\n/g, '\n');
+    const patchedJs = patchGameSource(await jsRes.text());
+    scriptUrl = URL.createObjectURL(new Blob([patchedJs], { type: 'text/javascript' }));
+    const scriptTag = '<script type="module" src="app.js"></script>';
+    if (!html.includes(scriptTag)) throw new Error('game script tag not found');
+    const patchedHtml = html
+      .replace(scriptTag, () => `<script type="module" src="${scriptUrl}"></script>`)
+      .replace(/<html/i, '<html data-sclient-patched="1"');
+    const doc = frame.contentDocument;
+    const win = frame.contentWindow;
+    if (!doc || !win) throw new Error('frame is gone');
+    doc.open();
+    win.history.replaceState(null, '', gameUrl.pathname + gameUrl.search);
+    doc.write(patchedHtml);
+    doc.close();
+    frame.addEventListener('load', () => setTimeout(() => URL.revokeObjectURL(scriptUrl), 60000), { once: true });
+  } catch (error) {
+    console.warn(`Aquavoid ${version}: loading the unpatched game instead.`, error);
+    if (scriptUrl) URL.revokeObjectURL(scriptUrl);
+    if (!frame.isConnected) return;
+    frame.dataset.fallback = '1';
+    frame.src = gameUrl.href;
+  }
+}
+
 async function mountInstance(inst) {
   clearFrame();
 
@@ -148,6 +255,7 @@ async function mountInstance(inst) {
   frame.allow = 'fullscreen; autoplay; clipboard-write';
   installBetterESCOnFrame(frame, inst.id);
   frame.addEventListener('load', async () => {
+    if (!isGameDocument(frame)) return;
     try {
       const engine = await waitForModEngine();
       if (!engine) { toast('The mod engine did not finish loading, so mods were not applied. Reload the page and try again.'); return; }
@@ -158,9 +266,9 @@ async function mountInstance(inst) {
       toast('The game started, but its mod profile could not be applied.');
     }
   });
-  frame.src = gameUrl.href;
   const wrap = $('instanceFrameWrap');
   wrap.appendChild(frame);
+  loadGameIntoFrame(frame, gameUrl, inst.version);
 
   // Fullscreen is controlled by the top-level S-Client document so the
   // Keyboard Lock API can keep Escape from dismissing the game fullscreen.
