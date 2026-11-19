@@ -3,8 +3,6 @@
 const MAX_INSTANCES = 3;
 const SUPPORTED_VERSIONS = ['1.0', '1.01'];
 // Game versions are hosted in this repo's GitHub Pages root: /game-versions/Aquavoid-<version>/
-const VERSION_FILES = ['index.html', 'app.js', 'style.css'];
-const INSTANCE_CACHE_REVISION = 'sclient-auth-firestore-decoupled-2026-11-19-r1';
 const versionFolder = v => `game-versions/Aquavoid-${v}/`;
 const $ = id => document.getElementById(id);
 const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -40,80 +38,29 @@ function toast(message) {
 }
 
 
-// ---- Local file store (IndexedDB): each instance keeps its own downloaded copy of the game files ----
-let dbPromise = null;
-function openDb() {
-  if (!dbPromise) dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open('sclient-instances', 1);
-    req.onupgradeneeded = () => req.result.createObjectStore('files');
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-  return dbPromise;
-}
-async function idb(mode, fn) {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('files', mode);
-    const out = fn(tx.objectStore('files'));
-    tx.oncomplete = () => resolve(out?.result);
-    tx.onerror = () => reject(tx.error);
-  });
-}
-const putFile = (id, name, text) => idb('readwrite', s => s.put(text, `${id}/${name}`));
-const getFile = (id, name) => idb('readonly', s => s.get(`${id}/${name}`));
-const deleteFiles = id => idb('readwrite', s => [...VERSION_FILES, '_revision'].forEach(n => s.delete(`${id}/${n}`)));
-
-// Serve each installed build from its own IndexedDB copy through a same-origin
-// service-worker URL. This preserves Firebase's origin while actually using the
-// files downloaded for the selected instance.
-let instanceCacheRegistration = null;
-async function ensureInstanceCache() {
-  if (!('serviceWorker' in navigator)) return false;
+// ---- Cleanup of the retired local-copy system ----
+// Earlier builds stored a copy of each game version in IndexedDB and served it through a service
+// worker. Games now load straight from their hosted version folder, so remove those leftovers.
+async function cleanupLegacyInstanceCache() {
   try {
-    if (!instanceCacheRegistration) {
-      const workerUrl = new URL('sclient-sw.js', document.baseURI);
-      const scopeUrl = new URL('./', document.baseURI);
-      instanceCacheRegistration = await navigator.serviceWorker.register(workerUrl.href, { scope: scopeUrl.pathname });
+    if ('serviceWorker' in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations
+        .filter(r => [r.active, r.waiting, r.installing].some(w => w?.scriptURL?.endsWith('sclient-sw.js')))
+        .map(r => r.unregister()));
     }
-    await navigator.serviceWorker.ready;
-    if (!navigator.serviceWorker.controller) {
-      await new Promise(resolve => {
-        let settled = false;
-        const finish = () => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timeout);
-          resolve();
-        };
-        const timeout = setTimeout(finish, 4000);
-        navigator.serviceWorker.addEventListener('controllerchange', finish, { once: true });
-        // Close the narrow race where the first controllerchange happened
-        // between the initial check and listener registration.
-        if (navigator.serviceWorker.controller) finish();
-      });
-    }
-    return !!navigator.serviceWorker.controller;
+    indexedDB.deleteDatabase('sclient-instances');
   } catch (error) {
-    console.warn('Local instance cache is unavailable; using the hosted game files.', error);
-    return false;
+    console.info('Legacy instance cache cleanup skipped.', error);
   }
 }
 
-async function downloadVersion(version, id, onProgress) {
-  const base = versionFolder(version);
-  for (let i = 0; i < VERSION_FILES.length; i++) {
-    const name = VERSION_FILES[i];
-    onProgress?.(`Downloading ${name}…`, Math.round((i / VERSION_FILES.length) * 85));
-    const res = await fetch(base + name, { cache: 'no-cache' });
-    if (!res.ok) throw new Error(`${name}: HTTP ${res.status}`);
-    const text = await res.text();
-    if (!text.trim()) throw new Error(`${name} is empty`);
-    await putFile(id, name, text);
-  }
-  onProgress?.('Verifying files…', 92);
-  for (const name of VERSION_FILES) if (!(await getFile(id, name))) throw new Error(`${name} failed to save`);
-  await putFile(id, '_revision', INSTANCE_CACHE_REVISION);
+// Confirms a version folder is really hosted before an instance is created for it.
+async function verifyVersionAvailable(version, onProgress) {
+  onProgress?.(`Checking Aquavoid ${version}…`, 40);
+  const res = await fetch(versionFolder(version) + 'index.html', { cache: 'no-cache' });
+  if (!res.ok) throw new Error(`Aquavoid ${version} is not available (HTTP ${res.status})`);
+  onProgress?.('Ready.', 90);
 }
 
 // ---- Launching: build the game page from the downloaded files and run it in the Game tab ----
@@ -179,34 +126,9 @@ function installBetterESCOnFrame(frame) {
 async function mountInstance(inst) {
   clearFrame();
 
-  // Ensure a complete installed copy exists before launching. The service
-  // worker serves it under this site's origin (unlike Blob/srcdoc URLs), so
-  // Firebase Auth and relative app/style paths continue to work.
-  let cacheReady = await ensureInstanceCache();
-  let filesReady = false;
-  // IndexedDB requests are asynchronous; verify them before choosing the URL.
-  try {
-    const [storedFiles, revision] = await Promise.all([
-      Promise.all(VERSION_FILES.map(name => getFile(inst.id, name))),
-      getFile(inst.id, '_revision')
-    ]);
-    filesReady = storedFiles.every(value => typeof value === 'string' && value.trim())
-      && revision === INSTANCE_CACHE_REVISION;
-  } catch (_) { filesReady = false; }
-  if (!filesReady) {
-    await downloadVersion(inst.version, inst.id, (label, percent) => {
-      const step = $('installStep'), amount = $('installPercent'), bar = $('installBar');
-      if (step) step.textContent = `Preparing launch: ${label}`;
-      if (amount) amount.textContent = `${percent}%`;
-      if (bar) bar.style.width = `${percent}%`;
-    });
-    cacheReady = await ensureInstanceCache();
-  }
-  if (!cacheReady) toast('Local instance cache is unavailable in this browser; running the hosted game files instead.');
-
-  const gameUrl = cacheReady
-    ? new URL(`instance-cache/${encodeURIComponent(inst.id)}/index.html`, document.baseURI)
-    : new URL(versionFolder(inst.version) + 'index.html', document.baseURI);
+  // The game loads straight from its hosted version folder (same origin as S-Client, so the
+  // shared Firebase login and the mod messages keep working).
+  const gameUrl = new URL(versionFolder(inst.version) + 'index.html', document.baseURI);
   gameUrl.searchParams.set('sclientInstance', inst.id);
   gameUrl.searchParams.set('sclientVersion', inst.version);
   const betterESCEnabled = await instanceHasBetterESC(inst);
@@ -591,7 +513,6 @@ function deleteInstance(id) {
   if (pendingLaunchInstanceId === id) setPendingLaunchInstance(null);
   if (id === activeInstanceId) closeActiveInstance();
   instances = instances.filter(i => i.id !== id);
-  deleteFiles(id).catch(() => {});
   window.SClientCloud?.deleteInstanceMods?.(id)?.catch?.(() => {});
   persist();
   renderLibrary();
@@ -650,21 +571,19 @@ async function runInstall() {
   };
   let failed = false;
   try {
-    setProgress(`Fetching Aquavoid ${version}…`, 5);
-    await downloadVersion(version, id, setProgress);
+    setProgress(`Preparing Aquavoid ${version}…`, 5);
+    await verifyVersionAvailable(version, setProgress);
     setProgress('Creating instance…', 100);
     await new Promise(r => setTimeout(r, 350));
   } catch (err) {
     console.error('Install failed:', err);
     failed = true;
-    deleteFiles(id).catch(() => {});
-    toast('Download failed. Check your connection and try again.');
+    toast('Could not install this version. Check your connection and try again.');
   }
   // Re-check the cap right before committing (e.g. another tab filled the slots).
   if (failed) {
     // nothing is created when the download fails
   } else if (instances.length >= MAX_INSTANCES) {
-    deleteFiles(id).catch(() => {});
     toast('Instance limit reached.');
   } else {
     instances.push({ id, name, version, createdAt: Date.now(), lastPlayed: 0, playSeconds: 0 });
@@ -786,6 +705,7 @@ function init() {
   } catch (error) {
     console.info('Could not restore a pending Aquavoid launch.', error);
   }
+  cleanupLegacyInstanceCache();
   restorePlaytimeBackup();
   wireEvents();
   updatePlayHeader();
