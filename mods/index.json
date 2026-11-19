@@ -35,6 +35,42 @@
         "1.0",
         "1.01"
       ]
+    },
+    {
+      "id": "fightingpatches",
+      "file": "fightingpatches.sclient",
+      "name": "FightingPatches",
+      "author": "KitaCat",
+      "version": "1.0.0",
+      "gameVersion": "1.0 + 1.01",
+      "icon": "⚔️",
+      "description": "Enemies still hurt you when you touch them, but not while you are above them.",
+      "tags": [
+        "Combat",
+        "Gameplay"
+      ],
+      "gameVersions": [
+        "1.0",
+        "1.01"
+      ]
+    },
+    {
+      "id": "boatpatches",
+      "file": "boatpatches.sclient",
+      "name": "BoatPatches",
+      "author": "KitaCat",
+      "version": "1.0.0",
+      "gameVersion": "1.0 + 1.01",
+      "icon": "⛵",
+      "description": "Every boat model's sail faces the right way, billowing toward the bow.",
+      "tags": [
+        "Ship models",
+        "Cosmetic"
+      ],
+      "gameVersions": [
+        "1.0",
+        "1.01"
+      ]
     }
   ]
 }

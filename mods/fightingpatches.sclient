@@ -1,0 +1,29 @@
+{
+  "format": "sclient-mod",
+  "formatVersion": 2,
+  "language": "SCL",
+  "languageVersion": 1,
+  "id": "fightingpatches",
+  "name": "FightingPatches",
+  "version": "1.0.0",
+  "author": "KitaCat",
+  "game": "aquavoid",
+  "gameVersion": "1.0",
+  "gameVersions": [
+    "1.0",
+    "1.01"
+  ],
+  "description": "Enemies still hurt you when you touch them, but not while you are above them.",
+  "icon": "⚔️",
+  "permissions": [
+    "combat.stompImmunity"
+  ],
+  "program": {
+    "onInstall": [
+      {
+        "op": "toast",
+        "message": "FightingPatches installed. Enable it for an instance to jump over enemies safely."
+      }
+    ]
+  }
+}
